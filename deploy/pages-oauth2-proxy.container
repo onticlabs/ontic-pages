@@ -1,0 +1,36 @@
+# Google sign-in in front of the ontic-pages gateway. Install as
+# /etc/containers/systemd/pages-oauth2-proxy.container.
+#
+# Caddy sends every request for pages.onticlabs.io here (127.0.0.1:4190).
+# Signed in, oauth2-proxy forwards it to http://gateway:8790 with
+# X-Forwarded-Email set; signed out, it starts the Google sign-in.
+[Unit]
+Description=ontic-pages Google sign-in (oauth2-proxy)
+StartLimitIntervalSec=0
+
+[Container]
+ContainerName=pages-oauth2-proxy
+# The version Olympus pins.
+Image=quay.io/oauth2-proxy/oauth2-proxy:v7.15.4
+Network=pages.network
+# The image's own uid; the config file is owned by 65532 numerically (pages.sh).
+User=65532
+Group=65532
+Volume=/etc/ontic-pages/oauth2-proxy.cfg:/etc/ontic-pages/oauth2-proxy.cfg:ro
+# 4180 is atlas's oauth2-proxy and 4181 olympus's on this box.
+PublishPort=127.0.0.1:4190:4180
+Exec=--config=/etc/ontic-pages/oauth2-proxy.cfg
+
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+LogDriver=journald
+PodmanArgs=--memory=256m
+StopTimeout=10
+
+[Service]
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

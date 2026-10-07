@@ -1,0 +1,39 @@
+# Google sign-in for ontic-pages. deploy/pages.sh writes the real file to
+# /etc/ontic-pages/oauth2-proxy.cfg (mode 600, owner 65532) from secrets.env;
+# this is an annotated copy. TOML: quote every value.
+
+provider = "google"
+# The team's Google OAuth client, with https://pages.onticlabs.io/oauth2/callback
+# among its authorized redirect URIs.
+client_id     = "FILL_IN.apps.googleusercontent.com"
+client_secret = "FILL_IN"
+
+# Generate once and keep: openssl rand -base64 32 | tr -- '+/' '-_'
+# Not the same value as Olympus's.
+cookie_secret = "FILL_IN_32_BYTE_BASE64"
+
+# Only Ontic Google accounts.
+email_domains = ["onticlabs.io"]
+
+# Host-only cookie for pages.onticlabs.io (the old deploy needed
+# .pages.onticlabs.io for one subdomain per page; path-based pages do not).
+whitelist_domains = ["pages.onticlabs.io"]
+cookie_expire   = "720h"
+cookie_refresh  = "55m"
+cookie_secure   = true
+cookie_samesite = "lax"
+cookie_httponly = true
+skip_provider_button = true
+
+# Forward signed-in requests to the gateway with X-Forwarded-Email set.
+upstreams = ["http://gateway:8790/"]
+pass_user_headers = true
+pass_basic_auth = false
+
+http_address  = "0.0.0.0:4180"
+reverse_proxy = true
+# The pages network (pages.network): Caddy's connections arrive NATed from it.
+trusted_proxy_ips = ["172.31.241.0/24"]
+real_client_ip_header = "X-Forwarded-For"
+
+redirect_url = "https://pages.onticlabs.io/oauth2/callback"

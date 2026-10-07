@@ -1,0 +1,39 @@
+# ontic-pages: https://pages.onticlabs.io/<name>/
+#
+#   browser -> caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190 -> pages-gateway (pages network)
+#
+# Install as /etc/caddy/conf.d/pages.caddy (the main Caddyfile imports conf.d/*.caddy).
+# This replaces the old file, which also had a `*.pages.onticlabs.io` block.
+#
+# Identity headers must never arrive from the internet: oauth2-proxy sets
+# X-Forwarded-Email itself, and the gateway writes it to the log.
+(pages_strip_identity) {
+	header_up -X-Forwarded-Email
+	header_up -X-Forwarded-User
+	header_up -X-Forwarded-Groups
+	header_up -X-Forwarded-Preferred-Username
+	header_up -X-Forwarded-Access-Token
+	header_up -X-Auth-Request-Email
+	header_up -X-Auth-Request-User
+	header_up -X-Auth-Request-Groups
+	header_up -X-Auth-Request-Preferred-Username
+	header_up -X-Auth-Request-Access-Token
+}
+
+pages.onticlabs.io {
+	encode zstd gzip
+
+	# The gateway is read-only; a small cap is a guard.
+	request_body {
+		max_size 64KB
+	}
+
+	reverse_proxy 127.0.0.1:4190 {
+		flush_interval -1
+		import pages_strip_identity
+	}
+
+	log {
+		output stderr
+	}
+}

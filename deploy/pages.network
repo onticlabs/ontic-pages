@@ -1,0 +1,11 @@
+# The bridge the two pages containers share (pages-network.service after
+# `systemctl daemon-reload`). oauth2-proxy reaches the gateway by its alias
+# `gateway` on it. Same name and subnet as the old ontic pages deploy, so the
+# new units replace the old ones in place.
+[Unit]
+Description=ontic-pages container network
+
+[Network]
+NetworkName=ontic-pages
+Subnet=172.31.241.0/24
+Gateway=172.31.241.1

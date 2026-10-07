@@ -1,0 +1,10 @@
+# The Dockerfile copies only pyproject.toml, uv.lock, README.md and src/, but the
+# whole context is still sent to the builder: keep secrets and junk out of it.
+.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+_cli_snapshot
+tests
+deploy/secrets.env

@@ -1,0 +1,42 @@
+# The ontic-pages gateway as a Podman Quadlet unit. Install as
+# /etc/containers/systemd/pages-gateway.container; `systemctl daemon-reload`
+# generates pages-gateway.service. The image is built by deploy/pages.sh.
+#
+# It only reads the bucket. Sign-in happens in front of it (oauth2-proxy).
+[Unit]
+Description=ontic-pages gateway
+StartLimitIntervalSec=0
+
+[Container]
+ContainerName=pages-gateway
+Image=localhost/ontic-pages:latest
+Pull=never
+Network=pages.network
+NetworkAlias=gateway
+User=10003
+Group=10003
+
+# ONTIC_PAGES_BUCKET, ONTIC_PAGES_ENDPOINT, ONTIC_PAGES_REGION, ONTIC_PAGES_PREFIX
+# and a READ-ONLY AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY. Written by pages.sh,
+# mode 600 root:root, read by podman before the container starts.
+EnvironmentFile=/etc/ontic-pages/gateway.env
+Environment=TZ=Europe/Berlin
+
+# Loopback only, for health checks on the box. Browsers come in through
+# Caddy -> oauth2-proxy (127.0.0.1:4190) -> this container on the pages network.
+PublishPort=127.0.0.1:8790:8790
+Exec=gateway --host 0.0.0.0 --port 8790
+
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+LogDriver=journald
+PodmanArgs=--memory=512m
+StopTimeout=10
+
+[Service]
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
