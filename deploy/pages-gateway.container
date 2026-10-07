@@ -22,10 +22,12 @@ Group=10003
 EnvironmentFile=/etc/ontic-pages/gateway.env
 Environment=TZ=Europe/Berlin
 
-# Loopback only, for health checks on the box. Browsers come in through
-# Caddy -> oauth2-proxy (127.0.0.1:4190) -> this container on the pages network.
+# Two ways in, and only these two: Caddy on the host reaches 127.0.0.1:8790 for
+# /public/* and /_health, and oauth2-proxy reaches gateway:8790 on the pages network
+# for everything else. The gateway trusts X-Forwarded-Email, so never publish this
+# port on anything but loopback.
 PublishPort=127.0.0.1:8790:8790
-Exec=gateway --host 0.0.0.0 --port 8790
+Exec=gateway --host 0.0.0.0 --port 8790 --email-domain onticlabs.io
 
 ReadOnly=true
 DropCapability=all

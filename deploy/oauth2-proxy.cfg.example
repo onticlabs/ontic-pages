@@ -25,7 +25,10 @@ cookie_samesite = "lax"
 cookie_httponly = true
 skip_provider_button = true
 
-# Forward signed-in requests to the gateway with X-Forwarded-Email set.
+# Forward signed-in requests to the gateway with X-Forwarded-Email set. The gateway
+# decides private and ontic pages from that header, so pass_user_headers must stay true.
+# /public/* and /_health never come here: Caddy sends them straight to the gateway
+# (deploy/pages.caddy), so no skip_auth_routes are needed.
 upstreams = ["http://gateway:8790/"]
 pass_user_headers = true
 pass_basic_auth = false

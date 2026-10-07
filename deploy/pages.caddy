@@ -1,12 +1,15 @@
-# ontic-pages: https://pages.onticlabs.io/<name>/
+# ontic-pages: https://pages.onticlabs.io/<name>/ and https://pages.onticlabs.io/public/<name>/
 #
-#   browser -> caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190 -> pages-gateway (pages network)
+#   /public/*, /_health  caddy :443 -> pages-gateway 127.0.0.1:8790             (no sign-in)
+#   everything else      caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190 -> pages-gateway
 #
 # Install as /etc/caddy/conf.d/pages.caddy (the main Caddyfile imports conf.d/*.caddy).
 # This replaces the old file, which also had a `*.pages.onticlabs.io` block.
 #
-# Identity headers must never arrive from the internet: oauth2-proxy sets
-# X-Forwarded-Email itself, and the gateway writes it to the log.
+# The gateway decides who may open a page from X-Forwarded-Email, so that header must only
+# ever come from oauth2-proxy. Caddy strips it (and its relatives) from every request, on
+# both routes; oauth2-proxy sets it again for signed-in requests. On /public/* nobody is
+# signed in, and the gateway serves only pages whose visibility is public there.
 (pages_strip_identity) {
 	header_up -X-Forwarded-Email
 	header_up -X-Forwarded-User
@@ -28,9 +31,19 @@ pages.onticlabs.io {
 		max_size 64KB
 	}
 
-	reverse_proxy 127.0.0.1:4190 {
-		flush_interval -1
-		import pages_strip_identity
+	@direct path /public/* /_health
+	handle @direct {
+		reverse_proxy 127.0.0.1:8790 {
+			flush_interval -1
+			import pages_strip_identity
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:4190 {
+			flush_interval -1
+			import pages_strip_identity
+		}
 	}
 
 	log {
