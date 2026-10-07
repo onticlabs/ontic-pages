@@ -1,0 +1,137 @@
+"""The bucket layout, on any S3-compatible store:
+
+    <prefix><name>/current                   the current version id, as text
+    <prefix><name>/<version>/page.json       metadata of that version
+    <prefix><name>/<version>/<files...>      the page itself
+
+Versions are UTC timestamps (20261007T153000Z), so they sort by time. Nothing here deletes.
+"""
+
+from __future__ import annotations
+
+import json
+import mimetypes
+import re
+
+import boto3
+from botocore.exceptions import ClientError
+
+from .config import Config
+
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+VERSION_RE = re.compile(r"^\d{8}T\d{6}Z$")
+
+# Types mimetypes gets wrong or does not know on some systems.
+EXTRA_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".json": "application/json",
+    ".wasm": "application/wasm",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".webm": "video/webm",
+    ".mp4": "video/mp4",
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+    ".md": "text/markdown",
+}
+
+
+def content_type(path: str) -> str:
+    ext = path[path.rfind(".") :].lower() if "." in path.rsplit("/", 1)[-1] else ""
+    ctype = EXTRA_TYPES.get(ext) or mimetypes.guess_type(path)[0] or "application/octet-stream"
+    if ctype.startswith("text/") or ctype in ("application/json", "image/svg+xml"):
+        ctype += "; charset=utf-8"
+    return ctype
+
+
+def check_name(name: str) -> str:
+    if not NAME_RE.match(name):
+        raise ValueError(
+            f"bad page name {name!r}: use lowercase letters, digits, '.', '_' or '-' "
+            "(up to 64 characters, starting with a letter or digit)"
+        )
+    return name
+
+
+def make_client(cfg: Config):
+    kwargs = {}
+    if cfg.access_key_id and cfg.secret_access_key:
+        kwargs = {
+            "aws_access_key_id": cfg.access_key_id,
+            "aws_secret_access_key": cfg.secret_access_key,
+        }
+    return boto3.client("s3", endpoint_url=cfg.endpoint, region_name=cfg.region, **kwargs)
+
+
+def is_missing(err: ClientError) -> bool:
+    return err.response.get("Error", {}).get("Code") in ("NoSuchKey", "404", "NotFound")
+
+
+class Store:
+    def __init__(self, client, bucket: str, prefix: str = "pages/"):
+        if not bucket:
+            raise SystemExit("no bucket configured: set ONTIC_PAGES_BUCKET (see README)")
+        self.client, self.bucket, self.prefix = client, bucket, prefix
+
+    def key(self, *parts: str) -> str:
+        return self.prefix + "/".join(parts)
+
+    def put(self, key: str, body) -> None:
+        """Body is bytes or an open binary file."""
+        self.client.put_object(
+            Bucket=self.bucket, Key=key, Body=body, ContentType=content_type(key)
+        )
+
+    def get(self, key: str, range_header: str | None = None) -> dict | None:
+        """The raw get_object response, or None when the key does not exist."""
+        kwargs = {"Range": range_header} if range_header else {}
+        try:
+            return self.client.get_object(Bucket=self.bucket, Key=key, **kwargs)
+        except ClientError as err:
+            if is_missing(err):
+                return None
+            raise
+
+    def read_text(self, key: str) -> str | None:
+        obj = self.get(key)
+        return None if obj is None else obj["Body"].read().decode()
+
+    def exists(self, key: str) -> bool:
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=key)
+            return True
+        except ClientError as err:
+            if is_missing(err):
+                return False
+            raise
+
+    def _children(self, prefix: str) -> list[str]:
+        """Names one level below a prefix (like `ls`), without the trailing slash."""
+        out, token = [], None
+        while True:
+            kwargs = {"ContinuationToken": token} if token else {}
+            resp = self.client.list_objects_v2(
+                Bucket=self.bucket, Prefix=prefix, Delimiter="/", **kwargs
+            )
+            out += [p["Prefix"][len(prefix) :].rstrip("/") for p in resp.get("CommonPrefixes", [])]
+            if not resp.get("IsTruncated"):
+                return sorted(out)
+            token = resp["NextContinuationToken"]
+
+    def names(self) -> list[str]:
+        return [n for n in self._children(self.prefix) if NAME_RE.match(n)]
+
+    def versions(self, name: str) -> list[str]:
+        return [v for v in self._children(self.key(name) + "/") if VERSION_RE.match(v)]
+
+    def current(self, name: str) -> str | None:
+        text = self.read_text(self.key(name, "current"))
+        return text.strip() if text else None
+
+    def set_current(self, name: str, version: str) -> None:
+        self.put(self.key(name, "current"), version.encode())
+
+    def meta(self, name: str, version: str) -> dict:
+        text = self.read_text(self.key(name, version, "page.json"))
+        return json.loads(text) if text else {}
