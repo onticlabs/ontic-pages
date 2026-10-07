@@ -18,9 +18,9 @@ OUTSIDER = {"X-Forwarded-Email": "someone@gmail.com"}
 def test_visibility_file_and_default(store, s3, site):
     publish(store, site, "report", now=T1)
     assert store.visibility("report") == "ontic"
-    assert ("test-bucket", "pages/report/visibility") not in s3.objects
+    assert ("test-bucket", "report/visibility") not in s3.objects
     store.set_visibility("report", "public")
-    assert s3.objects[("test-bucket", "pages/report/visibility")][0] == b"public"
+    assert s3.objects[("test-bucket", "report/visibility")][0] == b"public"
     assert store.visibility("report") == "public"
     store.put(store.key("report", "visibility"), b"garbage")
     assert store.visibility("report") == "private"  # unreadable fails closed
@@ -45,7 +45,7 @@ def test_cli_share_url_list(cli_env, site, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "private: only owner@onticlabs.io can open it" in out
     assert out.strip().endswith("https://pages.example.org/report/")
-    store = Store(cli_env, "test-bucket", "pages/")
+    store = Store(cli_env, "test-bucket")
     assert store.meta("report", store.current("report"))["published_by"] == "owner@onticlabs.io"
 
     main(["share", "report", "public"])

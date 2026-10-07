@@ -22,7 +22,7 @@ def test_publish_folder(store, s3, site, tmp_path):
     assert page["meta"] == {"model": "abc123"}
     assert page["git"] is None
     assert page["published_by"]
-    v = "pages/report/20261007T153000Z/"
+    v = "report/20261007T153000Z/"
     assert keys(s3) == sorted(
         [
             v + f
@@ -36,7 +36,7 @@ def test_publish_folder(store, s3, site, tmp_path):
                 "style.css",
             )
         ]
-        + ["pages/report/current"]
+        + ["report/current"]
     )
     assert store.current("report") == "20261007T153000Z"
     assert json.loads(s3.objects[("test-bucket", v + "page.json")][0]) == page
@@ -87,11 +87,11 @@ def test_cli_publish_list_set_current(cli_env, site, capsys):
     out = capsys.readouterr().out
     assert "https://pages.example.org/report/" in out
     store_keys = keys(cli_env)
-    first = next(k for k in store_keys if k.endswith("page.json")).split("/")[2]
+    first = next(k for k in store_keys if k.endswith("page.json")).split("/")[1]
 
     (site / "index.html").write_text("<h1>version two</h1>")
     later = datetime(2030, 1, 1, tzinfo=UTC)
-    store = Store(cli_env, "test-bucket", "pages/")
+    store = Store(cli_env, "test-bucket")
     publish(store, site, "report", "second", now=later)
     publish(store, site, "other", "another page", now=later)
 

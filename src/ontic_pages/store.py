@@ -1,4 +1,5 @@
-"""The bucket layout, on any S3-compatible store:
+"""The bucket layout, on any S3-compatible store (the prefix is empty by default, so pages sit
+at the bucket root):
 
     <prefix><name>/current                   the current version id, as text
     <prefix><name>/visibility                private, ontic or public (absent means ontic)
@@ -24,7 +25,7 @@ VERSION_RE = re.compile(r"^\d{8}T\d{6}Z$")
 VISIBILITIES = ("private", "ontic", "public")
 DEFAULT_VISIBILITY = "ontic"
 # Path segments the gateway uses for itself, so no page may take them as its name.
-RESERVED_NAMES = {"public"}
+RESERVED_NAMES = {"public", "_info", "_health", "page.json"}
 
 # Types mimetypes gets wrong or does not know on some systems.
 EXTRA_TYPES = {
@@ -54,7 +55,7 @@ def check_name(name: str) -> str:
     if not NAME_RE.match(name) or name in RESERVED_NAMES:
         raise ValueError(
             f"bad page name {name!r}: use lowercase letters, digits, '.', '_' or '-' "
-            "(up to 64 characters, starting with a letter or digit; not 'public')"
+            "(up to 64 characters, starting with a letter or digit; not public or page.json)"
         )
     return name
 
@@ -80,7 +81,7 @@ def is_missing(err: ClientError) -> bool:
 
 
 class Store:
-    def __init__(self, client, bucket: str, prefix: str = "pages/"):
+    def __init__(self, client, bucket: str, prefix: str = ""):
         if not bucket:
             raise SystemExit("no bucket configured: set ONTIC_PAGES_BUCKET (see README)")
         self.client, self.bucket, self.prefix = client, bucket, prefix

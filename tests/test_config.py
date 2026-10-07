@@ -5,8 +5,10 @@ from ontic_pages.config import DEFAULT_PREFIX, DEFAULT_URL, load_config
 
 def test_defaults_without_file_or_env(tmp_path):
     cfg = load_config(tmp_path / "none.toml", env={})
-    assert cfg.bucket is None
-    assert cfg.prefix == DEFAULT_PREFIX
+    assert cfg.bucket == "ontic-pages"
+    assert cfg.endpoint == "https://s3.eu-central-003.backblazeb2.com"
+    assert cfg.region == "eu-central-003"
+    assert cfg.prefix == DEFAULT_PREFIX == ""
     assert cfg.url == DEFAULT_URL
     assert cfg.page_url("report") == "https://pages.onticlabs.io/report/"
 
@@ -47,3 +49,22 @@ def test_xdg_config_home(tmp_path, monkeypatch):
     (tmp_path / "ontic-pages" / "config.toml").write_text('bucket = "xdg"\n')
     monkeypatch.delenv("ONTIC_PAGES_BUCKET", raising=False)
     assert load_config().bucket == "xdg"
+
+
+def test_prefix_from_env(tmp_path):
+    assert load_config(tmp_path / "none.toml", env={"ONTIC_PAGES_PREFIX": "pages"}).prefix == (
+        "pages/"
+    )
+    assert load_config(tmp_path / "none.toml", env={"ONTIC_PAGES_PREFIX": "/"}).prefix == ""
+
+
+def test_store_at_root_and_with_prefix(s3, site):
+    from ontic_pages.publish import publish
+    from ontic_pages.store import Store
+
+    publish(Store(s3, "b"), site, "report")
+    publish(Store(s3, "b", "pages/"), site, "other")
+    keys = {k for _, k in s3.objects}
+    assert "report/current" in keys and "pages/other/current" in keys
+    assert Store(s3, "b").names() == ["pages", "report"]  # a prefix folder looks like a name
+    assert Store(s3, "b", "pages/").names() == ["other"]

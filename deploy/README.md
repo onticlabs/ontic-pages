@@ -5,7 +5,7 @@ Caddy and the same kind of Google sign-in that Olympus and Atlas use.
 
     /public/*, /_health  browser -> caddy :443 -> pages-gateway 127.0.0.1:8790                 (no sign-in)
     everything else     browser -> caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190 -> pages-gateway (pages network)
-    gateway -> bucket ontic-r3, prefix pages/, READ-ONLY key
+    gateway -> bucket ontic-pages (its own private B2 bucket), READ-ONLY key
 
 | File | What it is |
 |---|---|
@@ -50,12 +50,11 @@ deploy.
    gh repo deploy-key add <(echo '<the ssh-ed25519 line>') --repo onticlabs/ontic-pages --title "ontic-vps pages"
    ```
 
-2. **Read-only bucket key.** Bucket `ontic-r3`, prefix `pages/`, capabilities
-   `readFiles,listFiles` only. The old gateway key was limited to `jobs/`, so it
-   cannot be reused.
+2. **Read-only bucket key.** Scoped to the `ontic-pages` bucket, no write and no
+   delete. The old gateway key (bucket `ontic-r3`, prefix `jobs/`) is not used.
 
    ```sh
-   b2 key create --bucket ontic-r3 --name-prefix 'pages/' ontic-pages-gateway readFiles,listFiles
+   b2 key create --bucket ontic-pages ontic-pages-gateway listBuckets,listFiles,readFiles
    ```
 
    Its two values go into `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` of `secrets.env`.
@@ -67,7 +66,7 @@ deploy.
 
 ## Who can open what
 
-Each page has a visibility in `pages/<name>/visibility`: `private`, `ontic`
+Each page has a visibility in `<name>/visibility` in the bucket: `private`, `ontic`
 (the default when the file is absent) or `public`. The gateway stays a plain
 file server; access follows from routing plus one header:
 

@@ -25,29 +25,43 @@ Set environment variables, or put the same values in `~/.config/ontic-pages/conf
 
 | config.toml key | environment variable | meaning |
 |---|---|---|
-| `bucket` | `ONTIC_PAGES_BUCKET` | the S3-compatible bucket |
-| `endpoint` | `ONTIC_PAGES_ENDPOINT` | its S3 endpoint URL |
-| `region` | `ONTIC_PAGES_REGION` | its region |
-| `prefix` | `ONTIC_PAGES_PREFIX` | key prefix, default `pages/` |
+| `bucket` | `ONTIC_PAGES_BUCKET` | the S3-compatible bucket, default `ontic-pages` |
+| `endpoint` | `ONTIC_PAGES_ENDPOINT` | its S3 endpoint, default `https://s3.eu-central-003.backblazeb2.com` |
+| `region` | `ONTIC_PAGES_REGION` | its region, default `eu-central-003` |
+| `prefix` | `ONTIC_PAGES_PREFIX` | key prefix, default none (pages sit at the bucket root) |
 | `url` | `ONTIC_PAGES_URL` | where the gateway is, default `https://pages.onticlabs.io` |
 | `email` | `ONTIC_PAGES_EMAIL` | who you are, recorded as `published_by`; default git `user.email`, else `$USER` |
 | `access_key_id` | `AWS_ACCESS_KEY_ID` | key id |
 | `secret_access_key` | `AWS_SECRET_ACCESS_KEY` | key secret |
 
-The team uses Backblaze B2, the same bucket the old `ontic pages` used:
+The team uses its own private Backblaze B2 bucket, `ontic-pages`, and the defaults
+point at it, so the only thing to configure is a key:
 
 ```toml
-# ~/.config/ontic-pages/config.toml  (chmod 600 if it holds the key)
-bucket = "ontic-r3"
-endpoint = "https://s3.eu-central-003.backblazeb2.com"
-region = "eu-central-003"
-access_key_id = "..."
-secret_access_key = "..."
+# ~/.config/ontic-pages/config.toml  (chmod 600: it holds the key)
+access_key_id = "<key id>"
+secret_access_key = "<application key>"
 ```
 
 Without credentials in either place, boto3's usual lookup applies (`AWS_PROFILE`,
-`~/.aws/credentials`). Publishing needs a key that can read, list and write
-under `pages/`. It does not need delete rights.
+`~/.aws/credentials`).
+
+### Keys
+
+Two keys, both scoped to the `ontic-pages` bucket, created with the `b2` command
+line (`uv tool install b2`, then `b2 account authorize` with a key that may create
+keys). Neither can delete files, which matches the tool: it never deletes.
+
+```sh
+# For publishing (people and agents): read and write.
+b2 key create --bucket ontic-pages ontic-pages-publish listBuckets,listFiles,readFiles,writeFiles
+# For the gateway on the team box: read only.
+b2 key create --bucket ontic-pages ontic-pages-gateway listBuckets,listFiles,readFiles
+```
+
+Each prints a key id and an application key once; they go into
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (or the config file above, or the
+gateway's `deploy/secrets.env`).
 
 ## Use
 
@@ -66,9 +80,9 @@ ontic-pages share depth-eval public  # private, ontic or public
 ontic-pages url depth-eval           # the /public/ URL for public pages
 ```
 
-Page names are lowercase letters, digits, `.`, `_` and `-`, and `public` is
-reserved. Publishing again
-under the same name adds a version and makes it current. Hidden files (`.git`,
+Page names are lowercase letters, digits, `.`, `_` and `-`; `public` and
+`page.json` are reserved (as are `_info` and `_health`). Publishing again under
+the same name adds a version and makes it current. Hidden files (`.git`,
 `.DS_Store`) are skipped. Links inside a page should be relative (`img/a.png`,
 not `/img/a.png`), because the page lives under `/<name>/`.
 
@@ -89,10 +103,12 @@ even for public pages.
 
 ## In the bucket
 
-    pages/<name>/current                 the current version id
-    pages/<name>/visibility              private, ontic or public (absent means ontic)
-    pages/<name>/<version>/page.json     the metadata
-    pages/<name>/<version>/...           the files
+    <name>/current                 the current version id
+    <name>/visibility              private, ontic or public (absent means ontic)
+    <name>/<version>/page.json     the metadata
+    <name>/<version>/...           the files
+
+at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 
 ### page.json
 
@@ -143,17 +159,24 @@ by announcements. None of that is here. `set-current` replaces rollback, and
 `share` with three levels replaces the Share panel. That code lives on the
 ontic-cli branch `main-with-pages-and-viewer`.
 
-`scripts/migrate_old_pages.py` copies the old pages into this layout (server-side
-copies, nothing deleted). It reads the old system, so it is the one file here that
-imports ontic-cli:
+`scripts/migrate_old_pages.py` copies the old pages from the old jobs in `ontic-r3`
+into the `ontic-pages` bucket (nothing deleted). It reads the old system, so it is
+the one file here that imports ontic-cli. No key reads both buckets, so each file
+is read with your signed-in ontic session and uploaded with the ontic-pages
+read-write key:
 
 ```sh
-uv run --with /path/to/cli scripts/migrate_old_pages.py --mapping migration-mapping.json          # dry run
-uv run --with /path/to/cli scripts/migrate_old_pages.py --mapping migration-mapping.json --write  # copy
+# dry run: reads only, writes migration-mapping.json (keeps the names already in it)
+uv run --with /path/to/cli scripts/migrate_old_pages.py --mapping migration-mapping.json
+
+# copy, with the read-write key for ontic-pages
+AWS_ACCESS_KEY_ID=<key id> AWS_SECRET_ACCESS_KEY=<application key> \
+  uv run --with /path/to/cli scripts/migrate_old_pages.py --mapping migration-mapping.json --write
 ```
 
-The dry run writes nothing to the bucket. Edit the names in the mapping before `--write`
-if you want other names.
+Edit the names in the mapping before `--write` if you want other names. A re-run
+skips versions already copied. `--source-bucket` and `--dest-bucket` default to
+`ontic-r3` and `ontic-pages`; with equal buckets it copies server side instead.
 
 ## Still to update elsewhere
 

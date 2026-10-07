@@ -85,7 +85,7 @@ def test_info_page(store, site, monkeypatch):
 
 
 def test_info_command(cli_env, site, monkeypatch, capsys):
-    store = Store(cli_env, "test-bucket", "pages/")
+    store = Store(cli_env, "test-bucket")
     publish_two(store, site, monkeypatch)
     main(["info", "report"])
     out = capsys.readouterr().out

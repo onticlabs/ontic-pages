@@ -16,8 +16,9 @@ NetworkAlias=gateway
 User=10003
 Group=10003
 
-# ONTIC_PAGES_BUCKET, ONTIC_PAGES_ENDPOINT, ONTIC_PAGES_REGION, ONTIC_PAGES_PREFIX
-# and a READ-ONLY AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY. Written by pages.sh,
+# ONTIC_PAGES_BUCKET (ontic-pages), ONTIC_PAGES_ENDPOINT, ONTIC_PAGES_REGION, the optional
+# ONTIC_PAGES_PREFIX (empty: pages sit at the bucket root), and AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY of a READ-ONLY key scoped to the ontic-pages bucket. Written by pages.sh,
 # mode 600 root:root, read by podman before the container starts.
 EnvironmentFile=/etc/ontic-pages/gateway.env
 Environment=TZ=Europe/Berlin

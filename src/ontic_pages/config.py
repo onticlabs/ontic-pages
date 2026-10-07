@@ -2,10 +2,10 @@
 
 Read from ~/.config/ontic-pages/config.toml, then overridden by environment variables:
 
-    bucket            ONTIC_PAGES_BUCKET
-    endpoint          ONTIC_PAGES_ENDPOINT
-    region            ONTIC_PAGES_REGION
-    prefix            ONTIC_PAGES_PREFIX     (default "pages/")
+    bucket            ONTIC_PAGES_BUCKET     (default "ontic-pages")
+    endpoint          ONTIC_PAGES_ENDPOINT   (default Backblaze B2 eu-central-003)
+    region            ONTIC_PAGES_REGION     (default "eu-central-003")
+    prefix            ONTIC_PAGES_PREFIX     (default none: pages sit at the bucket root)
     url               ONTIC_PAGES_URL        (default "https://pages.onticlabs.io")
     email             ONTIC_PAGES_EMAIL      (who you are; default: git user.email, else $USER)
     access_key_id     AWS_ACCESS_KEY_ID
@@ -21,7 +21,10 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_PREFIX = "pages/"
+DEFAULT_PREFIX = ""
+DEFAULT_BUCKET = "ontic-pages"
+DEFAULT_ENDPOINT = "https://s3.eu-central-003.backblazeb2.com"
+DEFAULT_REGION = "eu-central-003"
 DEFAULT_URL = "https://pages.onticlabs.io"
 
 ENV = {
@@ -38,9 +41,9 @@ ENV = {
 
 @dataclass(frozen=True)
 class Config:
-    bucket: str | None = None
-    endpoint: str | None = None
-    region: str | None = None
+    bucket: str = DEFAULT_BUCKET
+    endpoint: str = DEFAULT_ENDPOINT
+    region: str = DEFAULT_REGION
     prefix: str = DEFAULT_PREFIX
     url: str = DEFAULT_URL
     email: str | None = None
