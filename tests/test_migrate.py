@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fake_s3 import FakeS3
 
 from ontic_pages.store import Store
 
@@ -57,15 +58,13 @@ class OnticStoreLike:
         return self.s3.objects[(self.bucket, key)][0]
 
 
-def test_write_copies_and_is_rerunnable(s3, monkeypatch, capsys):
-    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
-    s3.put_object(Bucket="b", Key="jobs/j1/output/data/index.html", Body=b"<p>one</p>")
-    s3.put_object(Bucket="b", Key="jobs/j2/output/data/index.html", Body=b"<p>two</p>")
-    s3.put_object(Bucket="b", Key="jobs/j2/output/data/img/a.png", Body=b"png")
+def old_jobs(s3, bucket):
+    """Two old page versions in the source bucket, and the mapping a dry run would write."""
+    s3.put_object(Bucket=bucket, Key="jobs/j1/output/data/index.html", Body=b"<p>one</p>")
+    s3.put_object(Bucket=bucket, Key="jobs/j2/output/data/index.html", Body=b"<p>two</p>")
+    s3.put_object(Bucket=bucket, Key="jobs/j2/output/data/img/a.png", Body=b"png")
     page = {"name": "old", "description": "d", "meta": {}, "git": None}
-    mapping = {
-        "bucket": "b",
-        "prefix": "pages/",
+    return {
         "pages": [
             {
                 "name": "renamed",
@@ -81,31 +80,66 @@ def test_write_copies_and_is_rerunnable(s3, monkeypatch, capsys):
             }
         ],
     }  # fmt: skip
-    ctx = SimpleNamespace(store=OnticStoreLike(s3, "b"))
-    migrate.write(ctx, mapping)
-    store = Store(s3, "b", "pages/")
+
+
+def check_result(store):
     assert store.current("renamed") == "20261006T000000Z"
     assert store.visibility("renamed") == "private"
     assert store.versions("renamed") == ["20261006T000000Z", "20261007T000000Z"]
-    assert s3.objects[("b", "pages/renamed/20261007T000000Z/img/a.png")] == (b"png", "image/png")
     meta = store.meta("renamed", "20261006T000000Z")
     assert (meta["name"], meta["version"]) == ("renamed", "20261006T000000Z")
-    assert not any(c == "delete_object" for c in s3.calls)
+
+
+def test_two_buckets_stream_through_this_machine(capsys):
+    source, dest = FakeS3(), FakeS3()
+    mapping = old_jobs(source, "ontic-r3")
+    source.calls.clear()
+    ctx = SimpleNamespace(store=OnticStoreLike(source, "ontic-r3"))
+    migrate.write(ctx, mapping, "ontic-r3", "ontic-pages", "", client=dest)
+    store = Store(dest, "ontic-pages")
+    check_result(store)
+    assert dest.objects[("ontic-pages", "renamed/20261007T000000Z/img/a.png")] == (
+        b"png",
+        "image/png",
+    )
+    assert dest.objects[("ontic-pages", "renamed/20261006T000000Z/index.html")][1] == (
+        "text/html; charset=utf-8"
+    )
+    assert source.calls == []  # the source is only read, through the ontic store
+    assert "copy_object" not in dest.calls and "delete_object" not in dest.calls
+    assert "streamed" in capsys.readouterr().out
 
     store.set_visibility("renamed", "public")  # changed after the migration: kept on a re-run
-    copies = s3.calls.count("copy_object")
-    migrate.write(ctx, mapping)
-    assert s3.calls.count("copy_object") == copies  # nothing copied twice
+    puts = dest.calls.count("put_object")
+    migrate.write(ctx, mapping, "ontic-r3", "ontic-pages", "", client=dest)
+    assert dest.calls.count("put_object") == puts + 1  # only `current` again
     assert "already there" in capsys.readouterr().out
     assert store.visibility("renamed") == "public"
 
     store.set_current("renamed", "20991231T000000Z")  # someone else's version now
-    migrate.write(ctx, mapping)
+    migrate.write(ctx, mapping, "ontic-r3", "ontic-pages", "", client=dest)
     assert "skip renamed" in capsys.readouterr().out
     assert store.current("renamed") == "20991231T000000Z"
 
+
+def test_same_bucket_copies_server_side(s3, monkeypatch):
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    mapping = old_jobs(s3, "b")
+    ctx = SimpleNamespace(store=OnticStoreLike(s3, "b"))  # its .client is used
+    migrate.write(ctx, mapping, "b", "b", "pages/")
+    check_result(Store(s3, "b", "pages/"))
+    assert s3.calls.count("copy_object") == 3
+    assert s3.objects[("b", "pages/renamed/20261007T000000Z/img/a.png")] == (b"png", "image/png")
+
+
+def test_write_refuses_bad_mappings(s3):
+    mapping = old_jobs(s3, "b")
+    ctx = SimpleNamespace(store=OnticStoreLike(s3, "b"))
     bad_level = dict(mapping, pages=[dict(mapping["pages"][0], visibility="team")])
     with pytest.raises(SystemExit, match="visibility must be"):
-        migrate.write(ctx, bad_level)
+        migrate.write(ctx, bad_level, "b", "d", "", client=s3)
     with pytest.raises(SystemExit, match="bad or duplicate"):
-        migrate.write(ctx, dict(mapping, pages=mapping["pages"] * 2))
+        migrate.write(ctx, dict(mapping, pages=mapping["pages"] * 2), "b", "d", "", client=s3)
+    reserved = dict(mapping, pages=[dict(mapping["pages"][0], name="public")])
+    with pytest.raises(SystemExit, match="bad or duplicate"):
+        migrate.write(ctx, reserved, "b", "d", "", client=s3)

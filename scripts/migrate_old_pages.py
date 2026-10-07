@@ -8,15 +8,19 @@ import ontic; the package in src/ stays independent of ontic-cli. Run it with
     uv run --with /Users/mikel/OnticDev/cli scripts/migrate_old_pages.py --write --mapping out.json
 
 Dry run (the default) reads the catalog and the store, prints one line per page and writes the
-full mapping to --mapping. Nothing is written to the bucket. Edit the names in the mapping if
-you like, then --write reads it back and copies, server side (S3 CopyObject):
+full mapping to --mapping. Nothing is written to any bucket. If --mapping already exists, its
+names are kept (edit them there). --write reads the mapping back and copies
 
-    jobs/<version job>/output/data/<path>  ->  <prefix><name>/<version>/<path>
+    <source bucket>/jobs/<job>/output/data/<path>  ->  <dest bucket>/<prefix><name>/<version>/<path>
 
-then writes page.json for each version and finally `current`. Nothing is ever deleted. A
-version whose page.json already exists is skipped, so --write can be re-run. --write uses
-the ontic session's S3 client, or, when AWS_ACCESS_KEY_ID is set, a client built from the
-ontic-pages configuration (that key must read jobs/ and write the pages prefix).
+then writes page.json for each version, then `visibility`, then `current`. Nothing is ever
+deleted. A version whose page.json already exists is skipped, so --write can be re-run.
+
+The source (ontic-r3) and the destination (ontic-pages) are different buckets and no key reads
+both, so by default each file is read with the signed-in ontic session and uploaded with the
+ontic-pages read-write key (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, or the key in
+~/.config/ontic-pages/config.toml). When --source-bucket equals --dest-bucket, files are
+copied server side (S3 CopyObject) instead.
 
 Old layout (ontic-cli branch main-with-pages-and-viewer, src/ontic/pages/publish.py): a head
 job's metadata has `page: {current, versions}`, a later version has `page: {of, version}`, and
@@ -36,7 +40,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ontic_pages.store import NAME_RE, VISIBILITIES, content_type
+from ontic_pages.store import NAME_RE, RESERVED_NAMES, VISIBILITIES, content_type
 
 DATA = "data/"
 VISIBILITY = {"private": "private", "team": "ontic", "public": "public"}
@@ -133,9 +137,12 @@ def read_version(store, job_id: str) -> dict:
     return {"r3": r3 or {}, "metadata": metadata or {}, "files": data, "other": other}
 
 
-def plan(ctx, prefix: str) -> tuple[list[dict], list[str]]:
+def plan(ctx, keep_names: dict[str, str] | None = None) -> tuple[list[dict], list[str]]:
+    """Every old page and its versions. `keep_names` (head id -> name, from an earlier
+    mapping) wins over the name made from the description."""
     store = ctx.store
-    taken = {d[len(prefix) :].rstrip("/") for d in store.list_dirs(prefix)}
+    keep_names = keep_names or {}
+    taken: set[str] = set()
     problems: list[str] = []
     pages = []
     heads = page_heads(ctx)
@@ -150,8 +157,9 @@ def plan(ctx, prefix: str) -> tuple[list[dict], list[str]]:
         meta = records[head]["metadata"]
         visibility = meta.get("visibility") or "private"
         current_job = page_block(meta).get("current") or head
-        base = slug(meta.get("description", "")) or head[:8]
-        if not NAME_RE.match(base):
+        base = keep_names.get(head) or slug(meta.get("description", "")) or head[:8]
+        if not NAME_RE.match(base) or base in RESERVED_NAMES:
+            problems.append(f"{head}: name {base!r} is not allowed, using {head[:8]!r}")
             base = head[:8]
         name = unique_name(base, taken)
         if name != base:
@@ -222,100 +230,156 @@ def plan(ctx, prefix: str) -> tuple[list[dict], list[str]]:
 # ---------------------------------------------------------------------------------------------
 
 
-def write_client(ctx):
-    if os.environ.get("AWS_ACCESS_KEY_ID"):
-        from ontic_pages.config import load_config
-        from ontic_pages.store import make_client
+class Dest:
+    """The few calls --write makes on the destination bucket."""
 
-        return make_client(load_config())
-    client = getattr(ctx.store, "client", None)
-    if client is None:
+    def __init__(self, client, bucket: str):
+        self.client, self.bucket = client, bucket
+
+    def exists(self, key: str) -> bool:
+        from botocore.exceptions import ClientError
+
+        from ontic_pages.store import is_missing
+
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=key)
+            return True
+        except ClientError as err:
+            if is_missing(err):
+                return False
+            raise
+
+    def read_text(self, key: str) -> str:
+        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read().decode()
+
+    def put(self, key: str, body: bytes, ctype: str) -> None:
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=body, ContentType=ctype)
+
+
+def dest_client(ctx, same_bucket: bool):
+    """Two buckets: a client from the ontic-pages key (AWS_* or the config file). One bucket:
+    that key when AWS_ACCESS_KEY_ID is set, else the ontic session's own client."""
+    from ontic_pages.config import load_config
+    from ontic_pages.store import make_client
+
+    cfg = load_config()
+    if same_bucket and not os.environ.get("AWS_ACCESS_KEY_ID"):
+        client = getattr(ctx.store, "client", None)
+        if client is not None:
+            return client
+    if not (cfg.access_key_id or os.environ.get("AWS_ACCESS_KEY_ID")):
         raise SystemExit(
-            f"the ontic store ({type(ctx.store).__name__}) exposes no S3 client; "
-            "set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (plus ONTIC_PAGES_ENDPOINT, "
-            "ONTIC_PAGES_REGION) for a key that reads jobs/ and writes the pages prefix"
+            "no key for the destination bucket: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY "
+            "(a read-write key for it), or put them in ~/.config/ontic-pages/config.toml"
         )
-    return client
+    return make_client(cfg)
 
 
-def write(ctx, mapping: dict) -> None:
-    store, bucket, prefix = ctx.store, mapping["bucket"], mapping["prefix"]
+def write(
+    ctx, mapping: dict, source_bucket: str, dest_bucket: str, prefix: str, client=None
+) -> None:
+    """Copy every version, then visibility, then current. Two buckets: each file is read with
+    the ontic session's store and uploaded with the destination key. One bucket: server-side
+    CopyObject. Never deletes; a version whose page.json exists is skipped."""
     names = [p["name"] for p in mapping["pages"]]
-    bad = [n for n in names if not NAME_RE.match(n)]
+    bad = [n for n in names if not NAME_RE.match(n) or n in RESERVED_NAMES]
     if bad or len(set(names)) != len(names):
         raise SystemExit(f"bad or duplicate names in the mapping: {bad or names}")
     levels = [p.get("visibility") for p in mapping["pages"]]
     if any(level not in VISIBILITIES for level in levels):
         raise SystemExit(f"visibility must be one of {VISIBILITIES}, got {levels}")
-    client = write_client(ctx)
+    same = source_bucket == dest_bucket
+    client = client or dest_client(ctx, same)
+    dest = Dest(client, dest_bucket)
+    print(
+        f"{source_bucket} -> {dest_bucket}/{prefix} ({'server-side copy' if same else 'streamed'})"
+    )
     for p in mapping["pages"]:
         name, ours = p["name"], {v["version"] for v in p["versions"]}
         cur_key = f"{prefix}{name}/current"
-        if store.exists(cur_key):
-            existing = store.get(cur_key).decode().strip()
+        if dest.exists(cur_key):
+            existing = dest.read_text(cur_key).strip()
             if existing not in ours:
                 print(f"skip {name}: it already serves {existing}, not a migrated version")
                 continue
         for v in p["versions"]:
             base = f"{prefix}{name}/{v['version']}/"
-            if store.exists(base + "page.json"):
+            if dest.exists(base + "page.json"):
                 print(f"  {name} {v['version']}: already there")
                 continue
+            size = 0
             for rel in v["files"]:
-                client.copy_object(
-                    Bucket=bucket,
-                    Key=base + rel,
-                    CopySource={"Bucket": bucket, "Key": f"jobs/{v['job']}/output/{DATA}{rel}"},
-                    ContentType=content_type(rel),
-                    MetadataDirective="REPLACE",
-                )
+                src = f"jobs/{v['job']}/output/{DATA}{rel}"
+                if same:
+                    client.copy_object(
+                        Bucket=dest_bucket,
+                        Key=base + rel,
+                        CopySource={"Bucket": source_bucket, "Key": src},
+                        ContentType=content_type(rel),
+                        MetadataDirective="REPLACE",
+                    )
+                else:
+                    data = ctx.store.get(src)
+                    dest.put(base + rel, data, content_type(rel))
+                size += v["files"][rel]
             page = dict(v["page"], name=name, version=v["version"])
-            client.put_object(
-                Bucket=bucket,
-                Key=base + "page.json",
-                Body=json.dumps(page, indent=2).encode(),
-                ContentType="application/json",
-            )
-            print(f"  {name} {v['version']}: {len(v['files'])} files")
+            dest.put(base + "page.json", json.dumps(page, indent=2).encode(), "application/json")
+            print(f"  {name} {v['version']}: {len(v['files'])} files, {size / 1e6:.1f} MB")
         vis_key = f"{prefix}{name}/visibility"
-        if not store.exists(vis_key):  # before current: a private page is never briefly open
-            client.put_object(
-                Bucket=bucket, Key=vis_key, Body=p["visibility"].encode(), ContentType="text/plain"
-            )
-        client.put_object(
-            Bucket=bucket, Key=cur_key, Body=p["current"].encode(), ContentType="text/plain"
-        )
+        if not dest.exists(vis_key):  # before current: a private page is never briefly open
+            dest.put(vis_key, p["visibility"].encode(), "text/plain")
+        dest.put(cur_key, p["current"].encode(), "text/plain")
         print(f"{name} now serves {p['current']} ({p['visibility']})")
 
 
 def main() -> None:
+    from ontic_pages.config import load_config
+
+    cfg = load_config()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--mapping", required=True, type=Path, help="mapping JSON to write or read")
     ap.add_argument("--write", action="store_true", help="copy for real (reads --mapping)")
-    ap.add_argument("--prefix", default="pages/", help="target prefix (default pages/)")
+    ap.add_argument("--source-bucket", default="ontic-r3", help="old jobs (default ontic-r3)")
+    ap.add_argument("--dest-bucket", default=cfg.bucket, help=f"pages (default {cfg.bucket})")
+    ap.add_argument("--prefix", default=cfg.prefix, help="prefix in the destination (default none)")
     args = ap.parse_args()
 
     from ontic.cli_support import build_ctx
 
     ctx = build_ctx().ctx
+    session_bucket = getattr(ctx.store, "bucket", None)
+    if session_bucket and session_bucket != args.source_bucket:
+        raise SystemExit(
+            f"the ontic session reads {session_bucket}, not --source-bucket {args.source_bucket}"
+        )
     if args.write:
-        write(ctx, json.loads(args.mapping.read_text()))
+        mapping = json.loads(args.mapping.read_text())
+        write(ctx, mapping, args.source_bucket, args.dest_bucket, args.prefix)
         return
 
-    pages, problems = plan(ctx, args.prefix)
-    total = 0
+    keep = {}
+    if args.mapping.exists():
+        keep = {p["head"]: p["name"] for p in json.loads(args.mapping.read_text())["pages"]}
+    pages, problems = plan(ctx, keep)
+    total = files = 0
     for p in pages:
         size = sum(sum(v["files"].values()) for v in p["versions"])
         total += size
+        files += sum(len(v["files"]) for v in p["versions"])
         print(
-            f"{p['name']:40} {p['visibility']:8} {p['head']}  {len(p['versions'])} version(s)  "
+            f"{p['name']:24} {p['visibility']:8} {p['head']}  {len(p['versions'])} version(s)  "
             f"current {p['current']}  {size / 1e6:.1f} MB"
         )
-    print(f"\n{len(pages)} pages, {total / 1e6:.1f} MB")
-    bucket = getattr(ctx.store, "bucket", None)
-    mapping = {"bucket": bucket, "prefix": args.prefix, "pages": pages, "problems": problems}
+    print(f"\n{len(pages)} pages, {files} files, {total / 1e6:.1f} MB")
+    mapping = {
+        "source_bucket": args.source_bucket,
+        "dest_bucket": args.dest_bucket,
+        "prefix": args.prefix,
+        "pages": pages,
+        "problems": problems,
+    }
     args.mapping.write_text(json.dumps(mapping, indent=2))
-    print(f"mapping written to {args.mapping} (dry run: nothing was written to the bucket)")
+    print(f"mapping written to {args.mapping} (dry run: nothing was written to any bucket)")
     if problems:
         print("\nproblems:", file=sys.stderr)
         for line in problems:
