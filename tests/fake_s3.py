@@ -23,6 +23,15 @@ class FakeS3:
         self.objects[(Bucket, Key)] = (data, ContentType)
         return {}
 
+    def copy_object(self, Bucket, Key, CopySource, ContentType=None, MetadataDirective=None):
+        self.calls.append("copy_object")
+        src = (CopySource["Bucket"], CopySource["Key"])
+        if src not in self.objects:
+            raise _error("NoSuchKey", "CopyObject")
+        data, ctype = self.objects[src]
+        self.objects[(Bucket, Key)] = (data, ContentType or ctype)
+        return {}
+
     def head_object(self, Bucket, Key):
         self.calls.append("head_object")
         if (Bucket, Key) not in self.objects:

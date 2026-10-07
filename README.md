@@ -129,6 +129,18 @@ a viewer frame, pinned comments on the page, a subdomain per page
 by announcements. None of that is here. `set-current` replaces rollback. That
 code lives on the ontic-cli branch `main-with-pages-and-viewer`.
 
+`scripts/migrate_old_pages.py` copies the old pages into this layout (server-side
+copies, nothing deleted). It reads the old system, so it is the one file here that
+imports ontic-cli:
+
+```sh
+uv run --with /path/to/cli scripts/migrate_old_pages.py --mapping migration-mapping.json          # dry run
+uv run --with /path/to/cli scripts/migrate_old_pages.py --mapping migration-mapping.json --write  # copy
+```
+
+The dry run writes nothing to the bucket. Edit the names in the mapping before `--write`
+if you want other names.
+
 ## Still to update elsewhere
 
 The agent skill at `~/.claude/skills/ontic-pages` (a chezmoi-managed dotfile)
