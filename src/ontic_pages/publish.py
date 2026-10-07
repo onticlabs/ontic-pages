@@ -13,6 +13,22 @@ from pathlib import Path
 from .store import Store, check_name
 
 META_FILE = "page.json"
+INPUT_KINDS = ("model", "dataset", "checkpoint", "job", "run")
+
+
+def parse_input(text: str) -> dict[str, str]:
+    """`KIND:REF[@HASH]`, for example `model:da3-backbone@sha256:9f1c...`, becomes
+    {"kind": "model", "ref": "da3-backbone", "hash": "sha256:9f1c..."}. REF and HASH are free
+    text; nothing is looked up."""
+    kind, colon, rest = text.partition(":")
+    ref, at, hash_ = rest.rpartition("@") if "@" in rest else (rest, "", "")
+    entry = {"kind": kind, "ref": ref.strip()}
+    if at:
+        entry["hash"] = hash_.strip()
+    if not colon or kind not in INPUT_KINDS or not entry["ref"] or entry.get("hash") == "":
+        kinds = ", ".join(INPUT_KINDS)
+        raise ValueError(f"--from wants KIND:REF[@HASH] with KIND one of {kinds}, got {text!r}")
+    return entry
 
 
 def git(cwd: Path, *args: str) -> str | None:
@@ -64,8 +80,9 @@ def collect(source: Path) -> dict[str, Path]:
             files[rel.as_posix()] = path
     if not files:
         raise SystemExit(f"{source}: nothing to publish")
-    if META_FILE in files:
-        raise SystemExit(f"{source}: a top-level {META_FILE} is reserved for the page metadata")
+    for reserved in (META_FILE, "_info"):
+        if reserved in files:
+            raise SystemExit(f"{source}: a top-level {reserved} is reserved by ontic-pages")
     return files
 
 
@@ -85,6 +102,7 @@ def publish(
     name: str,
     description: str = "",
     meta: dict[str, str] | None = None,
+    inputs: list[dict[str, str]] | None = None,
     cwd: Path | None = None,
     now: datetime | None = None,
 ) -> dict:
@@ -103,6 +121,7 @@ def publish(
         .isoformat(),
         "published_by": publisher(),
         "description": description,
+        "inputs": list(inputs or []),
         "meta": dict(meta or {}),
         "git": git_provenance(cwd or Path.cwd()),
         "files": len(files),

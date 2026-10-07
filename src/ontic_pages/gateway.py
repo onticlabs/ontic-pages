@@ -2,6 +2,7 @@
 
     GET /                 a plain listing of every page
     GET /<name>/<path>    the file from <prefix><name>/<current>/<path>; index.html for folders
+    GET /<name>/_info     what page.json says about the page, and its versions
     GET /_health          "ok"
 
 Sign-in is not done here: in production the gateway sits behind oauth2-proxy and Caddy, and
@@ -19,6 +20,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from botocore.exceptions import ClientError
 
+from .info import history, info_html
 from .store import NAME_RE, Store, content_type
 
 CHUNK = 256 * 1024
@@ -56,9 +58,10 @@ def listing_html(store: Store, cache: CurrentCache) -> str:
             html.escape(meta.get("description", "")),
             html.escape(meta.get("published_at", version)),
             html.escape(meta.get("published_by", "")),
+            f'<a href="/{quote(name)}/_info">info</a>',
         ]
         rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
-    body = "\n".join(rows) or '<tr><td colspan="4">No pages yet.</td></tr>'
+    body = "\n".join(rows) or '<tr><td colspan="5">No pages yet.</td></tr>'
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Ontic pages</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -68,7 +71,7 @@ table {{ border-collapse: collapse; width: 100%; }}
 td, th {{ text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #ddd; }}
 </style></head><body>
 <h1>Ontic pages</h1>
-<table><tr><th>Page</th><th>Description</th><th>Published</th><th>By</th></tr>
+<table><tr><th>Page</th><th>Description</th><th>Published</th><th>By</th><th></th></tr>
 {body}
 </table></body></html>
 """
@@ -120,6 +123,9 @@ def make_handler(store: Store, cache: CurrentCache):
             version = cache.get(name)
             if not version:
                 return self.send_text(404, f"no page named {name}\n")
+            if rest == "_info":
+                page = info_html(name, *history(store, name))
+                return self.send_text(200, page, "text/html; charset=utf-8")
             if rest == "" or rest.endswith("/"):
                 rest += "index.html"
             try:

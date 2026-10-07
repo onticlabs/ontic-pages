@@ -5,8 +5,8 @@ under a name, and it is served at `https://pages.onticlabs.io/<name>/` behind
 Google sign-in. Each publish is a new version; nothing is ever deleted.
 
 The only "provenance" is metadata: who published, when, an optional
-description, any `--meta key=value` you pass (for example the hash of the model
-a report shows), and the git remote, branch, commit and dirty flag of the
+description, what it was made from (`--from model:<name>@<hash>`, free text), any
+`--meta key=value` you pass, and the git remote, branch, commit and dirty flag of the
 directory you publish from. Nothing is checked against anything.
 
 It does not depend on ontic-cli.
@@ -52,12 +52,14 @@ under `pages/`. It does not need delete rights.
 ```sh
 # Publish a folder (it should have an index.html) or one .html file (served as index.html).
 ontic-pages publish ./report --name depth-eval --description "Depth eval, Oct 7" \
-    --meta model=sha256:3f2a... --meta dataset=arctic-s01
+    --from model:da3-backbone@sha256:9f1c... --from dataset:point-clouds-arctic \
+    --from run:onticlabs/fwomo/3k2x9 --meta seed=7
 # published depth-eval version 20261007T153000Z (12 files)
 # https://pages.onticlabs.io/depth-eval/
 
 ontic-pages list                     # every page and its current version
 ontic-pages list --name depth-eval   # its versions, newest first, * marks the current one
+ontic-pages info depth-eval          # everything page.json says, plus the versions
 ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
 ontic-pages url depth-eval
 ```
@@ -67,24 +69,45 @@ under the same name adds a version and makes it current. Hidden files (`.git`,
 `.DS_Store`) are skipped. Links inside a page should be relative (`img/a.png`,
 not `/img/a.png`), because the page lives under `/<name>/`.
 
+`--from KIND:REF[@HASH]` records what the page was made from. KIND is one of
+`model`, `dataset`, `checkpoint`, `job`, `run`. REF is free text (a registry
+name, a job id, a W&B run path) and the optional HASH too (a sha256, a job
+id). Nothing is looked up or checked: pages stay plain HTML in a bucket, and
+these entries only point at things tracked elsewhere (for example by ontic-cli).
+`--meta key=value` holds anything else.
+
 In the bucket:
 
     pages/<name>/current                 the current version id
     pages/<name>/<version>/page.json     the metadata
     pages/<name>/<version>/...           the files
 
-`page.json` holds `name`, `version`, `published_at`, `published_by` (git
-`user.email`, else `$USER`), `description`, `meta`, `git` (`remote`, `branch`,
-`commit`, `dirty`, or null outside a repo) and `files` (the count). It is
-also served as `/<name>/page.json`, so a top-level `page.json` in your folder
-is refused.
+### page.json
+
+| field | what it is |
+|---|---|
+| `name` | the page name |
+| `version` | the version id, a UTC timestamp like `20261007T153000Z` |
+| `published_at` | the same time in ISO 8601 |
+| `published_by` | git `user.email`, else `$USER` |
+| `description` | from `--description`, may be empty |
+| `inputs` | list of `{"kind", "ref"}`, plus `"hash"` when given, from `--from` |
+| `meta` | map of strings from `--meta key=value` |
+| `git` | `{remote, branch, commit, dirty}` of the directory you published from, or null outside a git repo |
+| `files` | how many files the version has |
+
+`page.json` is also served as `/<name>/page.json`, and the gateway answers
+`/<name>/_info`, so a top-level `page.json` or `_info` in your folder is refused.
 
 ## The gateway
 
 `ontic-pages gateway --port 8790` serves the bucket: `GET /` lists every page
-(name, description, publish time, publisher), `GET /<name>/...` serves files
-of the current version with the right content type, `index.html` for folders,
-Range requests for video, and 404 otherwise. It does no sign-in. On the team
+(name, description, publish time, publisher, a link to its info page),
+`GET /<name>/...` serves files of the current version with the right content
+type, `index.html` for folders, Range requests for video, and 404 otherwise.
+`GET /<name>/_info` is a plain HTML page with what page.json says (inputs,
+metadata, git remote and commit linked to GitHub) and every version, the
+current one marked. It does no sign-in. On the team
 box it runs as a container behind oauth2-proxy (Google sign-in, `@onticlabs.io`
 only) and Caddy, and only logs the `X-Forwarded-Email` header oauth2-proxy
 sets. See [deploy/README.md](deploy/README.md).

@@ -8,6 +8,7 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `src/ontic_pages/config.py`: config file and environment variables.
 - `src/ontic_pages/store.py`: bucket layout, the S3 calls, content types, name rules.
 - `src/ontic_pages/publish.py`: collecting files, git metadata, writing a version.
+- `src/ontic_pages/info.py`: the facts behind `ontic-pages info` and the gateway's `/<name>/_info` page.
 - `src/ontic_pages/gateway.py`: the read-only HTTP server (stdlib `http.server`).
 - `src/ontic_pages/cli.py`: argparse commands.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used).

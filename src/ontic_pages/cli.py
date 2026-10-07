@@ -8,7 +8,8 @@ from pathlib import Path
 
 from . import gateway
 from .config import load_config
-from .publish import publish
+from .info import history, info_text
+from .publish import parse_input, publish
 from .store import VERSION_RE, Store, check_name, make_client
 
 
@@ -33,7 +34,8 @@ def cmd_publish(args) -> None:
     source = Path(args.source)
     if source.is_dir() and not (source / "index.html").exists():
         print(f"warning: {source} has no index.html; the page URL will answer 404", file=sys.stderr)
-    page = publish(store, source, args.name, args.description, parse_meta(args.meta))
+    inputs = [parse_input(x) for x in args.inputs]
+    page = publish(store, source, args.name, args.description, parse_meta(args.meta), inputs)
     print(f"published {page['name']} version {page['version']} ({page['files']} files)")
     print(cfg.page_url(args.name))
 
@@ -69,6 +71,14 @@ def cmd_set_current(args) -> None:
     print(cfg.page_url(args.name))
 
 
+def cmd_info(args) -> None:
+    store, _ = open_store(args)
+    current, metas = history(store, check_name(args.name))
+    if not metas:
+        raise SystemExit(f"no page named {args.name}")
+    print(info_text(args.name, current, metas))
+
+
 def cmd_url(args) -> None:
     print(load_config().page_url(check_name(args.name)))
 
@@ -91,7 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="extra metadata, repeatable (for example model=<hash>)",
+        help="any other metadata, repeatable",
+    )
+    s.add_argument(
+        "--from",
+        dest="inputs",
+        action="append",
+        default=[],
+        metavar="KIND:REF[@HASH]",
+        help="what the page was made from, repeatable; KIND is model, dataset, checkpoint, "
+        "job or run (for example model:da3-backbone@sha256:9f1c...)",
     )
     s.set_defaults(func=cmd_publish)
 
@@ -103,6 +122,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name")
     s.add_argument("version", help="a version id from `list --name`")
     s.set_defaults(func=cmd_set_current)
+
+    s = sub.add_parser("info", help="show a page's metadata and versions")
+    s.add_argument("name")
+    s.set_defaults(func=cmd_info)
 
     s = sub.add_parser("url", help="print the URL of a page")
     s.add_argument("name")
