@@ -35,18 +35,8 @@ def test_version_id_and_order():
     assert migrate.version_ids(head, {"page": {"versions": ["h", "v2"]}}) == ["h", "v2"]
 
 
-def test_inputs_and_git():
-    deps = {
-        "previous": {"job": "p", "source": "output/"},
-        "da3-backbone": {"job": "j1", "source": "output/", "model": "da3-backbone"},
-        "env": {"job": "j2", "source": "output/", "environment": "torch"},
-        "from-1234": {"job": "j3", "source": "output/"},
-    }
-    assert migrate.to_inputs(deps) == [
-        {"kind": "model", "ref": "da3-backbone", "hash": "j1"},
-        {"kind": "job", "ref": "j2"},
-        {"kind": "job", "ref": "j3"},
-    ]
+def test_git_and_visibility():
+    assert migrate.VISIBILITY == {"private": "private", "team": "ontic", "public": "public"}
     sc = {"repository": "https://github.com/o/r", "commit": "abc", "branch": "main", "dirty": 1}
     assert migrate.to_git(sc) == {
         "remote": "https://github.com/o/r", "branch": "main", "commit": "abc", "dirty": True
@@ -72,7 +62,7 @@ def test_write_copies_and_is_rerunnable(s3, monkeypatch, capsys):
     s3.put_object(Bucket="b", Key="jobs/j1/output/data/index.html", Body=b"<p>one</p>")
     s3.put_object(Bucket="b", Key="jobs/j2/output/data/index.html", Body=b"<p>two</p>")
     s3.put_object(Bucket="b", Key="jobs/j2/output/data/img/a.png", Body=b"png")
-    page = {"name": "old", "description": "d", "inputs": [], "meta": {}, "git": None}
+    page = {"name": "old", "description": "d", "meta": {}, "git": None}
     mapping = {
         "bucket": "b",
         "prefix": "pages/",
@@ -81,6 +71,7 @@ def test_write_copies_and_is_rerunnable(s3, monkeypatch, capsys):
                 "name": "renamed",
                 "head": "j1",
                 "current": "20261006T000000Z",
+                "visibility": "private",
                 "versions": [
                     {"version": "20261006T000000Z", "job": "j1", "files": {"index.html": 10},
                      "page": dict(page, version="x")},
@@ -94,21 +85,27 @@ def test_write_copies_and_is_rerunnable(s3, monkeypatch, capsys):
     migrate.write(ctx, mapping)
     store = Store(s3, "b", "pages/")
     assert store.current("renamed") == "20261006T000000Z"
+    assert store.visibility("renamed") == "private"
     assert store.versions("renamed") == ["20261006T000000Z", "20261007T000000Z"]
     assert s3.objects[("b", "pages/renamed/20261007T000000Z/img/a.png")] == (b"png", "image/png")
     meta = store.meta("renamed", "20261006T000000Z")
     assert (meta["name"], meta["version"]) == ("renamed", "20261006T000000Z")
     assert not any(c == "delete_object" for c in s3.calls)
 
+    store.set_visibility("renamed", "public")  # changed after the migration: kept on a re-run
     copies = s3.calls.count("copy_object")
     migrate.write(ctx, mapping)
     assert s3.calls.count("copy_object") == copies  # nothing copied twice
     assert "already there" in capsys.readouterr().out
+    assert store.visibility("renamed") == "public"
 
     store.set_current("renamed", "20991231T000000Z")  # someone else's version now
     migrate.write(ctx, mapping)
     assert "skip renamed" in capsys.readouterr().out
     assert store.current("renamed") == "20991231T000000Z"
 
+    bad_level = dict(mapping, pages=[dict(mapping["pages"][0], visibility="team")])
+    with pytest.raises(SystemExit, match="visibility must be"):
+        migrate.write(ctx, bad_level)
     with pytest.raises(SystemExit, match="bad or duplicate"):
         migrate.write(ctx, dict(mapping, pages=mapping["pages"] * 2))

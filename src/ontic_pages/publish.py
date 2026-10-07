@@ -10,25 +10,9 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .store import Store, check_name
+from .store import Store, check_name, check_visibility
 
 META_FILE = "page.json"
-INPUT_KINDS = ("model", "dataset", "checkpoint", "job", "run")
-
-
-def parse_input(text: str) -> dict[str, str]:
-    """`KIND:REF[@HASH]`, for example `model:da3-backbone@sha256:9f1c...`, becomes
-    {"kind": "model", "ref": "da3-backbone", "hash": "sha256:9f1c..."}. REF and HASH are free
-    text; nothing is looked up."""
-    kind, colon, rest = text.partition(":")
-    ref, at, hash_ = rest.rpartition("@") if "@" in rest else (rest, "", "")
-    entry = {"kind": kind, "ref": ref.strip()}
-    if at:
-        entry["hash"] = hash_.strip()
-    if not colon or kind not in INPUT_KINDS or not entry["ref"] or entry.get("hash") == "":
-        kinds = ", ".join(INPUT_KINDS)
-        raise ValueError(f"--from wants KIND:REF[@HASH] with KIND one of {kinds}, got {text!r}")
-    return entry
 
 
 def git(cwd: Path, *args: str) -> str | None:
@@ -102,12 +86,16 @@ def publish(
     name: str,
     description: str = "",
     meta: dict[str, str] | None = None,
-    inputs: list[dict[str, str]] | None = None,
+    visibility: str | None = None,
+    published_by: str | None = None,
     cwd: Path | None = None,
     now: datetime | None = None,
 ) -> dict:
-    """Upload the files, then page.json, then flip `current`. Returns page.json."""
+    """Upload the files, then page.json, then the visibility (only when given; a later publish
+    without it keeps the level), then flip `current`. Returns page.json."""
     check_name(name)
+    if visibility is not None:
+        check_visibility(visibility)
     files = collect(source)
     version = new_version(store, name, now)
     for rel, path in files.items():
@@ -119,13 +107,14 @@ def publish(
         "published_at": datetime.strptime(version, "%Y%m%dT%H%M%SZ")
         .replace(tzinfo=UTC)
         .isoformat(),
-        "published_by": publisher(),
+        "published_by": published_by or publisher(),
         "description": description,
-        "inputs": list(inputs or []),
         "meta": dict(meta or {}),
         "git": git_provenance(cwd or Path.cwd()),
         "files": len(files),
     }
     store.put(store.key(name, version, META_FILE), json.dumps(page, indent=2).encode())
+    if visibility is not None:
+        store.set_visibility(name, visibility)
     store.set_current(name, version)
     return page

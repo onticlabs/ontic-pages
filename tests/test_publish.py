@@ -102,15 +102,16 @@ def test_cli_publish_list_set_current(cli_env, site, capsys):
 
     main(["list", "--name", "report"])
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].startswith("* 20300101T000000Z")
-    assert lines[1].startswith(f"  {first}") and "first" in lines[1]
+    assert lines[0] == "visibility: ontic"
+    assert lines[1].startswith("* 20300101T000000Z")
+    assert lines[2].startswith(f"  {first}") and "first" in lines[2]
 
     main(["set-current", "report", first])
     assert "report now serves" in capsys.readouterr().out
     assert store.current("report") == first
 
     main(["list", "--name", "report"])
-    assert capsys.readouterr().out.splitlines()[1].startswith(f"* {first}")
+    assert capsys.readouterr().out.splitlines()[2].startswith(f"* {first}")
 
     main(["url", "report"])
     assert capsys.readouterr().out.strip() == "https://pages.example.org/report/"

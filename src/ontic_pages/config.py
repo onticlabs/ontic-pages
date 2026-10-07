@@ -7,6 +7,7 @@ Read from ~/.config/ontic-pages/config.toml, then overridden by environment vari
     region            ONTIC_PAGES_REGION
     prefix            ONTIC_PAGES_PREFIX     (default "pages/")
     url               ONTIC_PAGES_URL        (default "https://pages.onticlabs.io")
+    email             ONTIC_PAGES_EMAIL      (who you are; default: git user.email, else $USER)
     access_key_id     AWS_ACCESS_KEY_ID
     secret_access_key AWS_SECRET_ACCESS_KEY
 
@@ -29,6 +30,7 @@ ENV = {
     "region": "ONTIC_PAGES_REGION",
     "prefix": "ONTIC_PAGES_PREFIX",
     "url": "ONTIC_PAGES_URL",
+    "email": "ONTIC_PAGES_EMAIL",
     "access_key_id": "AWS_ACCESS_KEY_ID",
     "secret_access_key": "AWS_SECRET_ACCESS_KEY",
 }
@@ -41,11 +43,12 @@ class Config:
     region: str | None = None
     prefix: str = DEFAULT_PREFIX
     url: str = DEFAULT_URL
+    email: str | None = None
     access_key_id: str | None = None
     secret_access_key: str | None = None
 
-    def page_url(self, name: str) -> str:
-        return f"{self.url.rstrip('/')}/{name}/"
+    def page_url(self, name: str, public: bool = False) -> str:
+        return f"{self.url.rstrip('/')}/{'public/' if public else ''}{name}/"
 
 
 def config_path() -> Path:

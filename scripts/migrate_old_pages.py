@@ -21,8 +21,9 @@ ontic-pages configuration (that key must read jobs/ and write the pages prefix).
 Old layout (ontic-cli branch main-with-pages-and-viewer, src/ontic/pages/publish.py): a head
 job's metadata has `page: {current, versions}`, a later version has `page: {of, version}`, and
 a head never updated has no `page` key and is its own only version. Files live under
-`output/data/` in each job's sealed manifest; `metadata.source_code` holds the git facts and
-`r3.yaml` dependencies hold the `--from` inputs (minus the internal `previous` edge).
+`output/data/` in each job's sealed manifest; `metadata.source_code` holds the git facts. The old
+`--from` dependencies are not carried over. Old visibility maps to the new levels: private
+stays private, team becomes ontic, public stays public.
 """
 
 from __future__ import annotations
@@ -35,12 +36,10 @@ import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ontic_pages.publish import INPUT_KINDS
-from ontic_pages.store import NAME_RE, content_type
+from ontic_pages.store import NAME_RE, VISIBILITIES, content_type
 
 DATA = "data/"
-PREVIOUS = "previous"
-REGISTRY_KINDS = ("model", "dataset", "checkpoint", "artifact", "environment")
+VISIBILITY = {"private": "private", "team": "ontic", "public": "public"}
 
 
 def slug(text: str) -> str:
@@ -69,24 +68,6 @@ def version_id(timestamp: str, used: set[str]) -> str:
         t += timedelta(seconds=1)
     used.add(v)
     return v
-
-
-def to_inputs(dependencies: dict | None) -> list[dict]:
-    """Old r3 dependencies -> ontic-pages inputs. A registry ref keeps its kind and name, with
-    the pinned job id as hash; anything else is a job."""
-    out = []
-    for name, entry in (dependencies or {}).items():
-        if name == PREVIOUS or not isinstance(entry, dict):
-            continue
-        kind = next((k for k in REGISTRY_KINDS if isinstance(entry.get(k), str)), None)
-        if kind in INPUT_KINDS:
-            item = {"kind": kind, "ref": entry[kind]}
-            if entry.get("job"):
-                item["hash"] = entry["job"]
-        else:  # a job id, or a registry kind ontic-pages has no word for (artifact, environment)
-            item = {"kind": "job", "ref": entry.get("job") or name}
-        out.append(item)
-    return out
 
 
 def to_git(source_code: dict | None) -> dict | None:
@@ -207,7 +188,6 @@ def plan(ctx, prefix: str) -> tuple[list[dict], list[str]]:
                 .isoformat(),
                 "published_by": vmeta.get("owner") or "",
                 "description": vmeta.get("description") or "",
-                "inputs": to_inputs(r3.get("dependencies")),
                 "meta": {
                     "old_job_id": job,
                     "old_head_id": head,
@@ -225,7 +205,15 @@ def plan(ctx, prefix: str) -> tuple[list[dict], list[str]]:
         if current is None:
             problems.append(f"{name}: current job {current_job} not among versions; using newest")
             current = versions[-1]["version"]
-        pages.append({"name": name, "head": head, "current": current, "versions": versions})
+        pages.append(
+            {
+                "name": name,
+                "head": head,
+                "current": current,
+                "visibility": VISIBILITY.get(visibility, "private"),
+                "versions": versions,
+            }
+        )
     return pages, problems
 
 
@@ -256,6 +244,9 @@ def write(ctx, mapping: dict) -> None:
     bad = [n for n in names if not NAME_RE.match(n)]
     if bad or len(set(names)) != len(names):
         raise SystemExit(f"bad or duplicate names in the mapping: {bad or names}")
+    levels = [p.get("visibility") for p in mapping["pages"]]
+    if any(level not in VISIBILITIES for level in levels):
+        raise SystemExit(f"visibility must be one of {VISIBILITIES}, got {levels}")
     client = write_client(ctx)
     for p in mapping["pages"]:
         name, ours = p["name"], {v["version"] for v in p["versions"]}
@@ -286,10 +277,15 @@ def write(ctx, mapping: dict) -> None:
                 ContentType="application/json",
             )
             print(f"  {name} {v['version']}: {len(v['files'])} files")
+        vis_key = f"{prefix}{name}/visibility"
+        if not store.exists(vis_key):  # before current: a private page is never briefly open
+            client.put_object(
+                Bucket=bucket, Key=vis_key, Body=p["visibility"].encode(), ContentType="text/plain"
+            )
         client.put_object(
             Bucket=bucket, Key=cur_key, Body=p["current"].encode(), ContentType="text/plain"
         )
-        print(f"{name} now serves {p['current']}")
+        print(f"{name} now serves {p['current']} ({p['visibility']})")
 
 
 def main() -> None:
@@ -312,7 +308,7 @@ def main() -> None:
         size = sum(sum(v["files"].values()) for v in p["versions"])
         total += size
         print(
-            f"{p['name']:40} {p['head']}  {len(p['versions'])} version(s)  "
+            f"{p['name']:40} {p['visibility']:8} {p['head']}  {len(p['versions'])} version(s)  "
             f"current {p['current']}  {size / 1e6:.1f} MB"
         )
     print(f"\n{len(pages)} pages, {total / 1e6:.1f} MB")
