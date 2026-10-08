@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import http.client
+import socket
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from ontic_pages.gateway import Site, make_server
 
@@ -54,3 +57,56 @@ def content(srv, name, path, **kwargs):
 
 FRAME = {"Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-site"}
 DOCUMENT = {"Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "none"}
+
+
+SECRET = "test-secret-" + "x" * 32
+
+
+def start_local(store, **kwargs):
+    """A gateway whose apex is its own address, http://127.0.0.1:<port>, so the command line
+    can talk to it with ONTIC_PAGES_URL. With a token secret."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    kwargs.setdefault("site", Site(f"http://127.0.0.1:{port}", email_domain="onticlabs.io"))
+    kwargs.setdefault("identity", cookie_identity)
+    kwargs.setdefault("ttl", 0)
+    kwargs.setdefault("token_secret", SECRET)
+    srv = make_server(store, "127.0.0.1", port, **kwargs)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv.url = f"http://127.0.0.1:{port}"
+    return srv
+
+
+def upload_server(s3):
+    """Stands in for the bucket's presigned PUT: stores into the fake S3 at the URLs its
+    generate_presigned_url makes, and refuses a Content-Type other than the signed one (403),
+    as S3 does. `fail` (a list) makes the next PUTs answer 500."""
+
+    class Put(BaseHTTPRequestHandler):
+        def do_PUT(self):
+            url = urlsplit(self.path)
+            bucket, _, key = unquote(url.path)[1:].partition("/")
+            signed = parse_qs(url.query)["ct"][0]
+            data = self.rfile.read(int(self.headers["Content-Length"]))
+            srv.puts.append((key, self.headers.get("Content-Type")))
+            if srv.fail:
+                srv.fail.pop()
+                code = 500
+            elif self.headers.get("Content-Type") != signed:
+                code = 403
+            else:
+                s3.objects[(bucket, key)] = (data, signed)
+                code = 200
+            self.send_response(code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Put)
+    srv.puts, srv.fail = [], []
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    s3.upload_base = f"http://127.0.0.1:{srv.server_port}"
+    return srv

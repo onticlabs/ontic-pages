@@ -9,8 +9,17 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /<name>/_info                  what page.json says about the page, and its versions
     GET  /public/<name>/<path>          old links: redirects to /<name>/<path>
     GET  /_api/pages/<name>             the page facts this viewer may see, as JSON
+    GET  /_api/pages/<name>/info        every version's page.json (signed in)
+    GET  /_api/pages                    the pages this viewer may open (signed in)
+    GET  /_api/me                       who is asking
     POST /_api/pages/<name>/visibility  {"visibility": ...}, by the owner only
-    GET  /_bar/bar.<hash>.js|css        the shell's script and style
+    POST /_api/pages/<name>/current     {"version": ...}, by the owner only
+    POST /_api/pages/<name>/versions    publish: start (uploads.py); then .../<version>/files for
+                                        more of the file list, and .../<version>/commit
+    GET  /_cli/login?code=              the command line's sign-in: Allow (tokens.py)
+    POST /_api/cli/approve              {"code": ...}, from that page
+    GET  /_api/cli/token?code=          the command line asks for its token
+    GET  /_bar/bar.<hash>.js|css        the shell's script and style (and login.<hash>.js)
 
 On a page's own host, <name>.<content suffix> (the content host):
 
@@ -23,9 +32,11 @@ On a page's own host, <name>.<content suffix> (the content host):
 
 On any host: GET /_health. On other hosts only (Caddy asks on 127.0.0.1): GET /_tls-ask?domain=.
 
-Who is asking comes from oauth2-proxy (auth.py), never from request headers. Access, checked
-before every answer: public anyone, ontic an @<email domain> address, private the current
-version's publisher. Writes go to the apex only, from the apex only (Sec-Fetch-Site, Origin).
+Who is asking comes from oauth2-proxy (auth.py), never from identity request headers, or from a
+signed token (`Authorization: Bearer`, the command line, tokens.py), which is refused from a
+browser (any Origin or Sec-Fetch-Site). Access, checked before every answer: public anyone,
+ontic an @<email domain> address, private the current version's publisher. Writes go to the apex
+only: from the apex itself (Sec-Fetch-Site, Origin) or with a token.
 """
 
 from __future__ import annotations
@@ -52,14 +63,35 @@ from .auth import (
 from .cache import MB, FileCache, PageCache
 from .config import DEFAULT_URL
 from .info import DESCRIPTION_CHARS, NAME_CHARS, history, info_html, short
-from .shell import Assets, inject, shell_csp, shell_html
-from .store import NAME_RE, RESERVED_NAMES, VISIBILITIES, Store, content_type
+from .shell import Assets, inject, login_html, shell_csp, shell_html
+from .store import (
+    NAME_RE,
+    RESERVED_NAMES,
+    VERSION_RE,
+    VISIBILITIES,
+    Store,
+    check_name,
+    content_type,
+)
+from .tokens import LoginCodes, check_secret, sign, verify
+from .uploads import Refused, Uploads
 
 CHUNK = 256 * 1024
 YEAR = "max-age=31536000, immutable"
 VERSIONED = re.compile(r"^_v/(\d{8}T\d{6}Z)(/.*)?$")
 API_PAGE = re.compile(r"^/_api/pages/([^/]+)$")
-API_VISIBILITY = re.compile(r"^/_api/pages/([^/]+)/visibility$")
+API_INFO = re.compile(r"^/_api/pages/([^/]+)/info$")
+API_WRITE = re.compile(
+    r"^/_api/pages/([^/]+)/(visibility|current|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+)
+APPROVE = "/_api/cli/approve"
+SECRET_QUERY = re.compile(r"\b(code)=[^&\s]+")
+EXPIRED = "not signed in, or the sign-in expired: run ontic-pages login"
+SMALL_BODY, LIST_BODY = 4096, 64 * 1024  # Caddy refuses anything over 64 KB anyway
+LOGIN_CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+)
 PLAIN_CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; "
     "form-action 'none'"
@@ -104,6 +136,10 @@ class Site:
         return f"{self.origin}/oauth2/start?rd={quote(url, safe='')}"
 
 
+class BadToken(Exception):
+    """A Bearer token that is not ours, or expired."""
+
+
 class Gateway:
     """Everything the request handler shares."""
 
@@ -115,12 +151,23 @@ class Gateway:
         ttl: float = 5.0,
         cache_bytes: int = 256 * MB,
         file_bytes: int = 4 * MB,
+        token_secret: str = "",
     ):
         self.store, self.site, self.identity = store, site, identity
         self.files = FileCache(store, cache_bytes, file_bytes)
         self.pages = PageCache(store, self.files, ttl)
         self.assets = Assets(site.origin)
         self.limit = RateLimit()
+        self.token_secret = check_secret(token_secret) if token_secret else ""
+        self.codes = LoginCodes()
+        self.uploads = Uploads(store)
+
+    def visible(self, email: str):
+        """(name, current, visibility, owner, page.json) of each page this viewer may open."""
+        for name in self.store.names():
+            version, visibility, owner = self.pages.get(name)
+            if version and allowed(visibility, owner, email, self.site.email_domain):
+                yield name, version, visibility, owner, self.files.meta(name, version)
 
     def facts(self, name: str, email: str) -> dict:
         """What the bar shows. Emails only for a signed-in viewer."""
@@ -157,11 +204,7 @@ BADGE_CSS = """
 
 def listing_html(gw: Gateway, email: str) -> str:
     rows = []
-    for name in gw.store.names():
-        version, visibility, owner = gw.pages.get(name)
-        if not version or not allowed(visibility, owner, email, gw.site.email_domain):
-            continue
-        meta = gw.files.meta(name, version)
+    for name, version, visibility, owner, meta in gw.visible(email):
         cells = [
             f'<a href="/{quote(name)}/">{short(name, NAME_CHARS)}</a>',
             f'<span class="badge {visibility}">{visibility}</span>',
@@ -212,10 +255,30 @@ def make_handler(gw: Gateway):
             self.who: str | None = None  # None: not asked yet
             self.cookies: list[str] = []
             self.on_apex = False
+            scheme, _, value = (self.headers.get("Authorization") or "").partition(" ")
+            self.token = value.strip() if scheme.lower() == "bearer" else None
+
+        def token_refused(self) -> bool:
+            """Answer and return True for a token that must not be used here: from a browser
+            (browsers never hold tokens), or with no token secret configured."""
+            if self.token is None:
+                return False
+            if self.headers.get("Origin") or self.headers.get("Sec-Fetch-Site"):
+                self.send_json(403, {"error": "tokens are for the command line, not browsers"})
+            elif not gw.token_secret:
+                self.send_json(503, {"error": "command line sign-in is not set up here"})
+            else:
+                return False
+            return True
 
         def email(self, required: bool = True) -> str:
             """The signed-in email or "". If oauth2-proxy does not answer, raise, unless the
-            answer only adds to a page anyone may open (required=False)."""
+            answer only adds to a page anyone may open (required=False). A token decides alone:
+            a bad one raises BadToken."""
+            if self.who is None and self.token is not None:
+                self.who = verify(gw.token_secret, self.token) or ""
+                if not self.who:
+                    raise BadToken()
             if self.who is None:
                 try:
                     self.who, self.cookies = gw.identity(self.headers.get("Cookie") or "")
@@ -243,7 +306,8 @@ def make_handler(gw: Gateway):
 
         def log_message(self, fmt, *args):
             who = getattr(self, "who", None) or "-"
-            sys.stderr.write(f"{self.log_date_time_string()} {who} {fmt % args}\n")
+            line = SECRET_QUERY.sub(r"\1=<hidden>", fmt % args)  # login codes stay out of logs
+            sys.stderr.write(f"{self.log_date_time_string()} {who} {line}\n")
 
         # --- answers ------------------------------------------------------------------------
 
@@ -312,6 +376,8 @@ def make_handler(gw: Gateway):
             try:
                 if path == "/_health":
                     return self.send_text(200, "ok\n")
+                if self.token_refused():
+                    return
                 if host == site.apex:
                     self.on_apex = True
                     return self.apex_get(path, query)
@@ -324,6 +390,8 @@ def make_handler(gw: Gateway):
             except IdentityUnavailable as err:
                 self.log_error("oauth2-proxy did not answer: %s", err)
                 return self.send_text(503, "sign-in is not answering, try again\n")
+            except BadToken:
+                return self.send_json(401, {"error": EXPIRED})
             except ClientError as err:
                 self.log_error("store error: %s", err)
                 return self.send_text(502, "store error\n")
@@ -346,6 +414,18 @@ def make_handler(gw: Gateway):
                 return self.send_asset(*found)
             if m := API_PAGE.match(path):
                 return self.api_get(m.group(1))
+            if m := API_INFO.match(path):
+                return self.api_info(m.group(1))
+            if path == "/_api/pages":
+                return self.api_list()
+            if path == "/_api/me":
+                if email := self.email():
+                    return self.send_json(200, {"email": email})
+                return self.send_json(401, {"error": EXPIRED})
+            if path == "/_api/cli/token":
+                return self.cli_token(query)
+            if path == "/_cli/login":
+                return self.cli_login(query)
             if path.startswith("/public/"):
                 return self.redirect(quote(path[len("/public") :]) + q)
             name, slash, rest = path[1:].partition("/")
@@ -410,56 +490,216 @@ def make_handler(gw: Gateway):
             if found := self.api_page(name, required=False):
                 self.send_json(200, gw.facts(name, found[3]))
 
+        def api_info(self, name: str):
+            """Every version's page.json, newest first (like /<name>/_info, signed in only)."""
+            if found := self.api_page(name, required=True):
+                if not found[3]:
+                    return self.send_json(401, {"error": EXPIRED})
+                current, metas = history(gw.store, name)
+                self.send_json(200, {
+                    "name": name, "current": current, "visibility": found[1], "versions": metas,
+                })  # fmt: skip
+
+        def api_list(self):
+            email = self.email()
+            if not email:
+                return self.send_json(401, {"error": EXPIRED})
+            pages = [
+                {
+                    "name": name,
+                    "visibility": visibility,
+                    "current": version,
+                    "published_by": owner,
+                    "published_at": meta.get("published_at", ""),
+                    "description": meta.get("description", ""),
+                }
+                for name, version, visibility, owner, meta in gw.visible(email)
+            ]
+            self.send_json(200, {"pages": pages})
+
+        # --- the command line's sign-in (tokens.py) ----------------------------------------
+
+        def cli_login(self, query: str):
+            """The page `ontic-pages login` opens: who you are, the end of the code, Allow."""
+            if not gw.token_secret:
+                return self.send_text(503, "command line sign-in is not set up here\n")
+            email = self.email()
+            if not email:
+                return self.redirect(site.sign_in(f"{site.origin}/_cli/login?{query}"), 302)
+            code = parse_qs(query).get("code", [""])[0]
+            problem = ""
+            if not allowed("ontic", "", email, site.email_domain):
+                problem = f"Only @{site.email_domain} accounts can sign in the command line."
+            elif not gw.codes.open(code):
+                problem = "This sign-in link is used up or too old. Run ontic-pages login again."
+            page = login_html(email, code, problem, gw.assets)
+            self.send_body(400 if problem else 200, page.encode(), {
+                "Content-Type": "text/html; charset=utf-8",
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": LOGIN_CSP,
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            })  # fmt: skip
+
+        def cli_token(self, query: str):
+            """The command line polls with its code: 202 until someone allowed it, then the
+            token, once."""
+            if not gw.token_secret:
+                return self.send_json(503, {"error": "command line sign-in is not set up here"})
+            if self.headers.get("Origin") or self.headers.get("Sec-Fetch-Site"):
+                return self.send_json(403, {"error": "for the command line, not browsers"})
+            email = gw.codes.claim(parse_qs(query).get("code", [""])[0])
+            if not email:
+                return self.send_json(202, {"status": "waiting for Allow in the browser"})
+            self.send_json(200, {"token": sign(gw.token_secret, email), "email": email})
+
+        # --- writes (apex only) -------------------------------------------------------------
+
         def do_POST(self):
             self.begin()
             path = unquote(urlsplit(self.path).path)
             host = (self.headers.get("Host") or "").lower()
             self.on_apex = host == site.apex
+            m = API_WRITE.match(path)
+            big = bool(m and m.group(2).startswith("versions") and m.group(4) != "commit")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = -1
-            if not 0 <= length <= 4096:
+            if not 0 <= length <= (LIST_BODY if big else SMALL_BODY):
                 self.close_connection = True
                 return self.send_json(413, {"error": "body too large"})
             body = self.rfile.read(length)
-            m = API_VISIBILITY.match(path)
-            if not self.on_apex or not m:
+            if not self.on_apex or not (m or path == APPROVE):
                 return self.send_json(404 if self.on_apex else 405, {"error": "no writes here"})
-            # A page's own scripts run on <name>.<suffix>, same-site with the apex, so the
-            # browser sends the viewer's cookie with their requests too. Only the shell itself
-            # passes these three checks.
-            same = self.headers.get("Sec-Fetch-Site") == "same-origin"
-            if not same or self.headers.get("Origin") != site.origin:
-                return self.send_json(403, {"error": "writes only from the bar"})
+            if self.token_refused():
+                return
+            if self.token is None:
+                # A page's own scripts run on <name>.<suffix>, same-site with the apex, so the
+                # browser sends the viewer's cookie with their requests too. Only the apex's
+                # own pages pass these two checks.
+                same = self.headers.get("Sec-Fetch-Site") == "same-origin"
+                if not same or self.headers.get("Origin") != site.origin:
+                    return self.send_json(403, {"error": "writes only from the bar"})
+            elif path == APPROVE:  # a token never makes another token
+                return self.send_json(403, {"error": "approve in the browser"})
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype != "application/json":
                 return self.send_json(415, {"error": "send application/json"})
             try:
-                found = self.api_page(m.group(1), required=True)
+                data = json.loads(body or b"{}")
+            except ValueError:
+                data = None
+            try:
+                if path == APPROVE:
+                    return self.approve(data)
+                name = m.group(1)
+                if m.group(2) == "versions":
+                    return self.publish_start(name, data)
+                if m.group(3):
+                    return self.publish_more(name, m.group(3), m.group(4), data)
+                found = self.api_page(name, required=True)
                 if not found:
                     return
                 _, _, owner, email = found
                 if not email:
-                    return self.send_json(401, {"error": "sign in first"})
+                    return self.send_json(401, {"error": EXPIRED})
                 if not gw.limit.allow(email.lower()):
                     return self.send_json(429, {"error": "too many changes, wait a minute"})
-                try:
-                    level = json.loads(body).get("visibility")
-                except (ValueError, AttributeError):
-                    level = None
-                if level not in VISIBILITIES:
-                    return self.send_json(400, {"error": "visibility: private, ontic or public"})
+                if not isinstance(data, dict):
+                    data = {}
+                if m.group(2) == "visibility":
+                    level = data.get("visibility")
+                    if level not in VISIBILITIES:
+                        error = "visibility: private, ontic or public"
+                        return self.send_json(400, {"error": error})
+                else:
+                    version = data.get("version")
+                    if (
+                        not isinstance(version, str)
+                        or not VERSION_RE.match(version)
+                        or (version not in gw.store.versions(name))
+                    ):
+                        return self.send_json(400, {"error": f"{name} has no such version"})
                 if email.strip().lower() != owner.strip().lower():
                     return self.send_json(403, {"error": "only the owner can change this"})
-                gw.store.set_visibility(m.group(1), level)
-                gw.pages.forget(m.group(1))
-                self.send_json(200, gw.facts(m.group(1), email))
+                if m.group(2) == "visibility":
+                    gw.store.set_visibility(name, level)
+                else:
+                    gw.store.set_current(name, version)
+                gw.pages.forget(name)
+                self.send_json(200, gw.facts(name, email))
             except IdentityUnavailable:
                 self.send_json(503, {"error": "sign-in is not answering, try again"})
+            except BadToken:
+                self.send_json(401, {"error": EXPIRED})
+            except Refused as err:
+                self.send_json(err.status, {"error": err.message})
             except ClientError as err:
                 self.log_error("store error: %s", err)
                 self.send_json(502, {"error": "store error"})
+
+        def approve(self, data):
+            """Allow on the login page: the code's token is for the signed-in email."""
+            if not gw.token_secret:
+                return self.send_json(503, {"error": "command line sign-in is not set up here"})
+            email = self.email()
+            if not allowed("ontic", "", email, site.email_domain):
+                return self.send_json(403 if email else 401, {"error": "sign in first"})
+            if not gw.limit.allow(email.lower()):
+                return self.send_json(429, {"error": "too many changes, wait a minute"})
+            code = data.get("code") if isinstance(data, dict) else None
+            if not isinstance(code, str) or not gw.codes.approve(code, email):
+                return self.send_json(400, {"error": "this sign-in link is used up or too old"})
+            self.send_json(200, {"email": email})
+
+        def may_publish(self, name: str) -> str:
+            """The publisher's email: a team member for a new page, the owner for a new version
+            of an existing one. Raises Refused otherwise."""
+            email = self.email()
+            if not email:
+                raise Refused(401, EXPIRED)
+            gw.pages.forget(name)
+            current, _, owner = gw.pages.get(name)
+            if current and email.strip().lower() != owner.strip().lower():
+                raise Refused(
+                    403,
+                    f"{name} belongs to {owner or 'someone else'}; only they can "
+                    "publish a new version of it (pick another name)",
+                )
+            if not current and not allowed("ontic", "", email, site.email_domain):
+                raise Refused(403, f"only @{site.email_domain} accounts can create pages")
+            return email
+
+        def publish_start(self, name: str, data):
+            try:
+                check_name(name)
+            except ValueError as err:
+                raise Refused(400, str(err)) from None
+            if not isinstance(data, dict):
+                raise Refused(400, "send {files, description, meta, git, visibility}")
+            email = self.may_publish(name)
+            if not gw.limit.allow(email.lower()):
+                raise Refused(429, "too many changes, wait a minute")
+            up, uploads = gw.uploads.start(name, email, data)
+            self.log_message("publish start %s %s (%d files)", name, up.version, len(up.files))
+            self.send_json(200, {"version": up.version, "uploads": uploads})
+
+        def publish_more(self, name: str, version: str, step: str, data):
+            email = self.may_publish(name)
+            if step == "files":
+                files = data.get("files") if isinstance(data, dict) else None
+                uploads = gw.uploads.add(name, version, email, files)
+                return self.send_json(200, {"version": version, "uploads": uploads})
+            if not gw.limit.allow(email.lower()):
+                raise Refused(429, "too many changes, wait a minute")
+            page, _ = gw.uploads.commit(name, version, email)
+            gw.pages.forget(name)
+            self.log_message("publish commit %s %s", name, version)
+            self.send_json(200, {
+                "page": page, "visibility": gw.store.visibility(name),
+                "url": f"{site.origin}/{quote(name)}/",
+            })  # fmt: skip
 
         # --- the content host ---------------------------------------------------------------
 
@@ -580,11 +820,13 @@ def make_server(
     auth_url: str = DEFAULT_AUTH_URL,
     cache_bytes: int = 256 * MB,
     file_bytes: int = 4 * MB,
+    token_secret: str = "",
 ) -> ThreadingHTTPServer:
-    """identity: who sent a Cookie header; default: --local-as, else oauth2-proxy at auth_url."""
+    """identity: who sent a Cookie header; default: --local-as, else oauth2-proxy at auth_url.
+    token_secret: signs the command line's tokens; without it their routes answer 503."""
     if identity is None:
         identity = fixed(local_email) if local_email else OAuth2Proxy(auth_url, ttl=ttl)
-    gw = Gateway(store, site or Site(), identity, ttl, cache_bytes, file_bytes)
+    gw = Gateway(store, site or Site(), identity, ttl, cache_bytes, file_bytes, token_secret)
     server = ThreadingHTTPServer((host, port), make_handler(gw))
     server.daemon_threads = True
     return server
