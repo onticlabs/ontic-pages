@@ -16,6 +16,7 @@ import mimetypes
 import re
 
 import boto3
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 from .config import Config
@@ -77,7 +78,11 @@ def make_client(cfg: Config):
             "aws_access_key_id": cfg.access_key_id,
             "aws_secret_access_key": cfg.secret_access_key,
         }
-    return boto3.client("s3", endpoint_url=cfg.endpoint, region_name=cfg.region, **kwargs)
+    # s3v4 for the presigned upload URLs too (B2 takes only that), signed for cfg.region.
+    return boto3.client(
+        "s3", endpoint_url=cfg.endpoint, region_name=cfg.region,
+        config=BotoConfig(signature_version="s3v4"), **kwargs,
+    )  # fmt: skip
 
 
 def is_missing(err: ClientError) -> bool:
@@ -108,6 +113,29 @@ class Store:
             if is_missing(err):
                 return None
             raise
+
+    def presign_put(self, key: str, seconds: int = 3600) -> tuple[str, dict[str, str]]:
+        """A URL that lets its holder PUT this one key for `seconds`, and the headers to send
+        with it (the content type is signed, so the upload must carry exactly that one)."""
+        ctype = content_type(key)
+        url = self.client.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": self.bucket, "Key": key, "ContentType": ctype},
+            ExpiresIn=seconds,
+        )
+        return url, {"Content-Type": ctype}
+
+    def sizes(self, prefix: str) -> dict[str, int]:
+        """Key (below prefix) -> size, for every object under prefix."""
+        out, token = {}, None
+        while True:
+            kwargs = {"ContinuationToken": token} if token else {}
+            resp = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, **kwargs)
+            for obj in resp.get("Contents", []):
+                out[obj["Key"][len(prefix) :]] = obj["Size"]
+            if not resp.get("IsTruncated"):
+                return out
+            token = resp["NextContinuationToken"]
 
     def read_text(self, key: str) -> str | None:
         obj = self.get(key)

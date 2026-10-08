@@ -11,10 +11,13 @@ Read from ~/.config/ontic-pages/config.toml, then overridden by environment vari
     content_suffix    ONTIC_PAGES_CONTENT_SUFFIX  (default: the host of url; each page's content is
                                              served from <name>.<content_suffix>)
     email             ONTIC_PAGES_EMAIL      (who you are; default: git user.email, else $USER)
+    direct            ONTIC_PAGES_DIRECT     (1: use your own bucket key, not the gateway)
     access_key_id     AWS_ACCESS_KEY_ID
     secret_access_key AWS_SECRET_ACCESS_KEY
+    token_secret      ONTIC_PAGES_TOKEN_SECRET  (the gateway only: signs the command line's tokens)
 
-Credentials left unset fall through to boto3's own lookup (AWS_PROFILE, ~/.aws).
+Credentials left unset fall through to boto3's own lookup (AWS_PROFILE, ~/.aws). The command line
+talks to the gateway at `url` with the token from `ontic-pages login` (token_path()), unless direct.
 """
 
 from __future__ import annotations
@@ -38,8 +41,10 @@ ENV = {
     "url": "ONTIC_PAGES_URL",
     "content_suffix": "ONTIC_PAGES_CONTENT_SUFFIX",
     "email": "ONTIC_PAGES_EMAIL",
+    "direct": "ONTIC_PAGES_DIRECT",
     "access_key_id": "AWS_ACCESS_KEY_ID",
     "secret_access_key": "AWS_SECRET_ACCESS_KEY",
+    "token_secret": "ONTIC_PAGES_TOKEN_SECRET",
 }
 
 
@@ -52,8 +57,14 @@ class Config:
     url: str = DEFAULT_URL
     content_suffix: str = ""
     email: str | None = None
+    direct: str = ""
     access_key_id: str | None = None
     secret_access_key: str | None = None
+    token_secret: str = ""
+
+    @property
+    def is_direct(self) -> bool:
+        return self.direct.strip().lower() in ("1", "true", "yes")
 
     def page_url(self, name: str) -> str:
         return f"{self.url.rstrip('/')}/{name}/"
@@ -62,6 +73,11 @@ class Config:
 def config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
     return Path(base) / "ontic-pages" / "config.toml"
+
+
+def token_path() -> Path:
+    """Where `ontic-pages login` keeps its token (mode 600)."""
+    return config_path().parent / "token"
 
 
 def load_config(path: Path | None = None, env: dict[str, str] | None = None) -> Config:

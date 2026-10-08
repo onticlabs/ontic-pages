@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import re
+from urllib.parse import quote, urlencode
 
 from botocore.exceptions import ClientError
 
@@ -21,6 +22,7 @@ class FakeS3:
     def __init__(self):
         self.objects: dict[tuple[str, str], tuple[bytes, str]] = {}
         self.calls: list[str] = []
+        self.upload_base = "http://uploads.invalid"
 
     def put_object(self, Bucket, Key, Body, ContentType="application/octet-stream"):
         self.calls.append("put_object")
@@ -62,6 +64,14 @@ class FakeS3:
         out.update(Body=io.BytesIO(data), ContentLength=len(data))
         return out
 
+    def generate_presigned_url(self, ClientMethod, Params, ExpiresIn):
+        """A URL on `upload_base` (helpers.upload_server stores PUTs to it here), with what was
+        signed in the query."""
+        self.calls.append("generate_presigned_url")
+        assert ClientMethod == "put_object" and set(Params) == {"Bucket", "Key", "ContentType"}
+        query = urlencode({"ct": Params["ContentType"], "expires": ExpiresIn})
+        return f"{self.upload_base}/{Params['Bucket']}/{quote(Params['Key'])}?{query}"
+
     def list_objects_v2(self, Bucket, Prefix="", Delimiter="", ContinuationToken=None):
         self.calls.append("list_objects_v2")
         keys = sorted(k for b, k in self.objects if b == Bucket and k.startswith(Prefix))
@@ -71,7 +81,7 @@ class FakeS3:
             if Delimiter and Delimiter in rest:
                 prefixes.add(Prefix + rest.split(Delimiter)[0] + Delimiter)
             else:
-                contents.append({"Key": key})
+                contents.append({"Key": key, "Size": len(self.objects[(Bucket, key)][0])})
         return {
             "Contents": contents,
             "CommonPrefixes": [{"Prefix": p} for p in sorted(prefixes)],

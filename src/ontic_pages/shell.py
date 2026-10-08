@@ -4,7 +4,11 @@ The shell is a small HTML page on the apex: the bar drawn in static HTML, the pa
 and a frame showing the page from its own host, <name>.<suffix>. Its script and style are served
 at content-hashed URLs so browsers keep them for a year. The bridge (static/bridge.js) is added
 to a page's HTML only when that HTML is loaded into the frame; it reports navigation, scrolling
-and readiness to the shell by postMessage. Stored files are never changed.
+and readiness to the shell by postMessage, and hands links to the apex to the shell, which opens
+them in the whole tab (the apex refuses to be framed). Stored files are never changed.
+
+The command line's sign-in page (login_html, static/login.js) lives here too: it is the other
+HTML page on the apex with a script.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ ACCESS = {
 }
 SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
 SANDBOX += " allow-downloads"
-BAR_RE = re.compile(r"^/_bar/bar\.([0-9a-f]{1,64})\.(js|css)$")
+BAR_RE = re.compile(r"^/_bar/(bar|login)\.([0-9a-f]{1,64})\.(js|css)$")
 BRIDGE_RE = re.compile(r"^/_bridge\.([0-9a-f]{1,64})\.js$")
 
 ICONS = {
@@ -42,13 +46,13 @@ def icon(name: str, cls: str = "") -> str:
 
 
 class Assets:
-    """bar.js, bar.css and bridge.js from the package, each with a hash of its bytes. The apex
-    origin is written into the bridge, which posts only to it."""
+    """bar.js, bar.css, bridge.js and login.js from the package, each with a hash of its bytes.
+    The apex origin is written into the bridge, which posts only to it."""
 
     def __init__(self, apex_origin: str):
         self.items: dict[str, tuple[bytes, str]] = {}
         static = files("ontic_pages") / "static"
-        for fname in ("bar.js", "bar.css", "bridge.js"):
+        for fname in ("bar.js", "bar.css", "bridge.js", "login.js"):
             data = (static / fname).read_bytes()
             data = data.replace(b"__APEX__", json.dumps(apex_origin).encode())
             self.items[fname] = (data, hashlib.sha256(data).hexdigest()[:16])
@@ -64,9 +68,14 @@ class Assets:
         m = BRIDGE_RE.match(path) if content_host else BAR_RE.match(path)
         if not m:
             return None
-        fname = "bridge.js" if content_host else f"bar.{m.group(2)}"
+        if content_host:
+            fname, asked = "bridge.js", m.group(1)
+        else:
+            fname, asked = f"{m.group(1)}.{m.group(3)}", m.group(2)
+        if fname not in self.items:  # login.css
+            return None
         data, digest = self.items[fname]
-        return data, content_type(fname), m.group(1) == digest
+        return data, content_type(fname), asked == digest
 
     @property
     def bridge_tag(self) -> bytes:
@@ -208,3 +217,35 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 </main>
 </body></html>
 """  # noqa: E501
+
+
+def login_html(email: str, code: str, problem: str, assets: Assets) -> str:
+    """`ontic-pages login` opens this: who you are, the end of the code to compare with the
+    terminal, and Allow (static/login.js posts the code). `problem` replaces the button."""
+    e = html.escape
+    if problem:
+        action = f'<p class="error">{e(problem)}</p>'
+    else:
+        action = (
+            f'<p>Your terminal shows a code ending in <b class="code">{e(code[-4:])}</b>. Allow '
+            "only if it matches and you just ran <code>ontic-pages login</code>.</p>\n"
+            f'<p><button id="allow" type="button" data-code="{e(code)}">Allow</button></p>\n'
+            '<p id="result" role="status"></p>'
+        )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Sign in ontic-pages</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<script src="{assets.url("login.js")}"></script>
+<style>
+body {{ font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 34rem; padding: 0 1rem; }}
+.code {{ font-family: ui-monospace, monospace; font-size: 1.3rem; letter-spacing: .1rem; }}
+button {{ font: inherit; padding: .4rem 1.4rem; border-radius: .4rem; cursor: pointer; }}
+.error {{ color: #b33; }}
+</style></head><body>
+<h1>Sign in the command line</h1>
+<p>The <code>ontic-pages</code> command line on your computer asks to act as
+<b>{e(email)}</b>: publish pages and change your own, for 30 days.</p>
+{action}
+</body></html>
+"""
