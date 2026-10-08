@@ -79,6 +79,9 @@
       case "scroll":
         if (fromFrame && isNumber(msg.y)) scrollY = msg.y;
         break;
+      case "open":
+        if (fromFrame && typeof msg.url === "string") openTop(msg.url);
+        break;
       // Later: comment pins and edit mode get their own types here.
     }
   });
@@ -92,6 +95,15 @@
     document.title = title ? title.slice(0, 300) : name;
     var raw = $("m-raw");
     if (raw) raw.href = rawUrl(p);
+  }
+
+  // A link in the page to the apex (another page, the listing): the frame may not navigate the
+  // tab, so it asks. Only URLs on this very origin.
+  function openTop(href) {
+    var url;
+    try { url = new URL(href, location.href); } catch (error) { return; }
+    if (url.origin !== location.origin) return;
+    location.assign(url.href);
   }
 
   function rawUrl(p) {

@@ -2,8 +2,10 @@
 // <script> tag for this file to a page's HTML only when it is loaded into the bar's frame;
 // stored files are never changed. It tells the bar when the page is ready, where it navigated
 // (path and title), that someone clicked in it, and how far it is scrolled; the bar can ask it
-// to scroll back after a new version loads. It posts to exactly one origin (the apex, written
-// in by the gateway) and accepts messages only from that origin and the parent window.
+// to scroll back after a new version loads. A plain click on a link to the apex (another page, the
+// listing) is handed to the bar, which opens it in the whole tab: the apex refuses to be framed.
+// It posts to exactly one origin (the apex, written in by the gateway) and accepts messages only
+// from that origin and the parent window.
 // Every message is {ontic: "<type>", ...}; later types (comment pins, edit mode) go here too.
 (function () {
   "use strict";
@@ -49,6 +51,23 @@
   });
 
   window.addEventListener("pointerdown", function () { send({ ontic: "engaged" }); }, true);
+
+  // Links to the apex. Only a plain left click on a link opened in this frame (or its top);
+  // the page's own handlers come first (bubble phase, defaultPrevented), and a new tab or window
+  // works without help.
+  window.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey
+        || event.shiftKey || event.altKey) return;
+    var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
+    if (!link || link.hasAttribute("download")) return;
+    var target = (link.getAttribute("target") || "").toLowerCase();
+    if (target && target !== "_self" && target !== "_top" && target !== "_parent") return;
+    var url;
+    try { url = new URL(link.href, location.href); } catch (error) { return; }
+    if (url.origin !== APEX) return;
+    event.preventDefault();
+    send({ ontic: "open", url: url.href });
+  });
 
   var timer = 0;
   window.addEventListener("scroll", function () {
