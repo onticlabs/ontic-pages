@@ -15,9 +15,13 @@ cookie_secret = "FILL_IN_32_BYTE_BASE64"
 # Only Ontic Google accounts.
 email_domains = ["onticlabs.io"]
 
-# Host-only cookie for pages.onticlabs.io (the old deploy needed
-# .pages.onticlabs.io for one subdomain per page; path-based pages do not).
-whitelist_domains = ["pages.onticlabs.io"]
+# Each page's content lives at <name>.pages.onticlabs.io, so the session cookie is set for
+# the parent .pages.onticlabs.io and every page host carries it to the gateway. Not
+# .onticlabs.io: pages run team JavaScript and must never see the Olympus or Atlas session.
+cookie_domains = [".pages.onticlabs.io"]
+# Where /oauth2/start may send a browser back to (the rd the gateway builds): page hosts and
+# the apex only.
+whitelist_domains = [".pages.onticlabs.io", "pages.onticlabs.io"]
 cookie_expire   = "720h"
 cookie_refresh  = "55m"
 cookie_secure   = true
@@ -25,13 +29,15 @@ cookie_samesite = "lax"
 cookie_httponly = true
 skip_provider_button = true
 
-# Forward signed-in requests to the gateway with X-Forwarded-Email set. The gateway
-# decides private and ontic pages from that header, so pass_user_headers must stay true.
-# /public/* and /_health never come here: Caddy sends them straight to the gateway
-# (deploy/pages.caddy), so no skip_auth_routes are needed.
-upstreams = ["http://gateway:8790/"]
-pass_user_headers = true
+# The gateway's whole use of this instance: GET /oauth2/auth with the browser's Cookie
+# header answers 202 with X-Auth-Request-Email for a session and 401 otherwise.
+# set_xauthrequest is what puts the email in that answer, so it must stay true. A refreshed
+# session comes back as Set-Cookie, which the gateway passes on to the browser.
+set_xauthrequest = true
 pass_basic_auth = false
+# No upstream: Caddy sends only /oauth2/* here (start, callback, sign_out), and the gateway
+# calls /oauth2/auth on the pages network (http://oauth2-proxy:4180).
+upstreams = ["static://404"]
 
 http_address  = "0.0.0.0:4180"
 reverse_proxy = true
