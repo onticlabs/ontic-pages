@@ -8,6 +8,7 @@ Caddy and the same kind of Google sign-in that Olympus and Atlas use.
     <name>.pages.onticlabs.io/*  browser -> caddy :443 -> pages-gateway 127.0.0.1:8790       (the page itself)
     gateway -> pages-oauth2-proxy (http://oauth2-proxy:4180/oauth2/auth, pages network): who is this cookie?
     gateway -> bucket ontic-pages (its own private B2 bucket), read and write key, no delete
+    laptop  -> bucket: file bytes, PUT to presigned URLs the gateway signs (never through Caddy)
 
 | File | What it is |
 |---|---|
@@ -53,9 +54,9 @@ deploy.
    gh repo deploy-key add <(echo '<the ssh-ed25519 line>') --repo onticlabs/ontic-pages --title "ontic-vps pages"
    ```
 
-2. **Bucket key: read and write, no delete.** The Share panel lets a page's owner
-   change its visibility, so the gateway writes `<name>/visibility` (and nothing
-   else). The `ontic-pages-publish` key has exactly the right capabilities
+2. **Bucket key: read and write, no delete.** The gateway is the only holder of a key: it
+   writes each version's `page.json`, `<name>/current` and `<name>/visibility`, and signs the
+   presigned PUT URLs the command line uploads files with. The `ontic-pages-publish` key has exactly the right capabilities
    (`listBuckets,listFiles,readFiles,writeFiles`, scoped to the bucket); reuse it, or
    make one for the gateway alone:
 
@@ -66,15 +67,20 @@ deploy.
    Its two values go into `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` of `secrets.env`.
    The read-only `ontic-pages-gateway` key is no longer enough.
 
-3. **Google OAuth.** The redirect URI `https://pages.onticlabs.io/oauth2/callback`
+3. **Token secret.** `ONTIC_PAGES_TOKEN_SECRET` signs the command line's 30-day tokens
+   (`ontic-pages login`). Generate it once with `openssl rand -base64 32` and put it in
+   `secrets.env`; `pages.sh check` refuses an empty or short one and `install` writes it into
+   `gateway.env`. Changing it signs everyone out.
+
+4. **Google OAuth.** The redirect URI `https://pages.onticlabs.io/oauth2/callback`
    is already on the client the old deploy used; reuse its id, secret and cookie secret.
 
-4. **DNS.** Two A records to 159.195.206.154: `pages` (exists) and the wildcard
+5. **DNS.** Two A records to 159.195.206.154: `pages` (exists) and the wildcard
    `*.pages` for the page hosts. Check that the wildcard still exists (it was slated
    for deletion after the path-based deploy) and add it back at Namecheap if not:
    `dig +short anything.pages.onticlabs.io` must print 159.195.206.154.
 
-5. **Caddy global option.** Page hosts get their certificates on demand, and Caddy
+6. **Caddy global option.** Page hosts get their certificates on demand, and Caddy
    must ask the gateway first. That is a global option in `/etc/caddy/Caddyfile`
    (a site file cannot set it); `pages.sh check` refuses to go on without it. As root
    on the box (`vps`), this one line adds it to the global options block (or creates
@@ -106,15 +112,35 @@ itself, the shell and the page's files alike, and before every answer (304s too)
   `private`: the `published_by` of the current version. Signed out, a page load
   redirects to `/oauth2/start?rd=<the page>`; signed in but not allowed is 403. The
   listing at `/` and `/<name>/_info` always need sign-in.
-- **Writes** (`POST /_api/pages/<name>/visibility`, the owner only) are taken on the
-  apex only, and only with `Sec-Fetch-Site: same-origin`, `Origin:
-  https://pages.onticlabs.io` and a JSON body, 20 per minute per person. A page's own
+- **Writes** (`POST /_api/...`: visibility, current version, publishing) are taken on the
+  apex only, with a JSON body, 20 per minute per person, and either from the apex's own pages
+  (`Sec-Fetch-Site: same-origin`, `Origin: https://pages.onticlabs.io`, cookie) or with a
+  command line token.
+- **Tokens** (`Authorization: Bearer op1...`) come from `ontic-pages login`: the login page at
+  `/_cli/login` (signed in, `@onticlabs.io` only) approves a code the terminal made, and the
+  terminal's next poll gets the token once. Codes live 5 minutes in memory, single use, at
+  most 100 at a time, and are hidden in the log. A request with a token and any `Origin` or
+  `Sec-Fetch-Site` header is refused: browsers never hold tokens. Without
+  `ONTIC_PAGES_TOKEN_SECRET` these routes answer 503.
+- **Publishing.** The command line sends the file list (Caddy's 64 KB body cap stays: big
+  lists go in several requests), gets one presigned PUT URL per file (valid 1 hour), uploads
+  straight to B2, then asks the gateway to commit; the gateway checks every file's size in the
+  bucket, then writes `page.json` with the token's email as `published_by`, the visibility and
+  `current`. Anyone at the domain may create a page; only the owner publishes new versions. A page's own
   scripts run on `<name>.pages.onticlabs.io`, which is same-site, so the browser would
   send the viewer's cookie with their requests; these checks are what stop a page from
   acting as the person looking at it.
 - **Only Caddy reaches the gateway**, on the box's loopback (`127.0.0.1:8790`). Caddy
   answers `/_tls-ask` with 404 on both public sites; the gateway answers it only for
   a Host that is neither the apex nor a page host.
+
+## What changed with publishing through the gateway (phase 2)
+
+- **New secret** `ONTIC_PAGES_TOKEN_SECRET` in `secrets.env` (see One-time setup, step 3).
+- **People need no key.** `ontic-pages login` once, then the usual commands. Admins keep
+  `--direct` with their own key.
+- **No Caddy change.** The body cap stays 64 KB; uploads go to B2 directly. B2 takes presigned
+  PUTs (SigV4, the configured region), checked end to end before the first deploy.
 
 ## What changed with the bar (phase 1)
 

@@ -18,30 +18,83 @@ It does not depend on ontic-cli.
 
 ```sh
 uv tool install 'ontic-pages @ git+https://github.com/onticlabs/ontic-pages'
+ontic-pages login     # once a month: sign in with Google in the browser
 ```
+
+Nobody needs a bucket key. The command line talks to the gateway at
+`https://pages.onticlabs.io`, signed in as you; the gateway alone holds the bucket key (write,
+never delete). File bytes go straight from your machine to the bucket with short-lived upload
+URLs the gateway hands out, so they never pass through the server.
+
+## Sign in
+
+```sh
+ontic-pages login     # opens https://pages.onticlabs.io/_cli/login?code=...
+# Check that the browser shows the code ending in ab3F, then click Allow.
+# signed in as you@onticlabs.io (for 30 days; the token is in ~/.config/ontic-pages/token)
+ontic-pages whoami    # you@onticlabs.io
+ontic-pages logout    # forget the token on this machine
+```
+
+`login` makes a random code, opens the login page in your browser (signed in with your
+`@onticlabs.io` Google account like every page) and waits up to 5 minutes. The page shows who
+you are and the last four characters of the code; Allow only if they match what your terminal
+printed. The terminal then gets a token for 30 days, kept in `~/.config/ontic-pages/token`
+(mode 600). On a machine without a browser, open the printed link on the same machine yourself.
+When the token expires, any command says `run ontic-pages login`.
+
+## Use
+
+```sh
+# Publish a folder (it should have an index.html) or one .html file (served as index.html).
+ontic-pages publish ./report --name depth-eval --description "Depth eval, Oct 7" \
+    --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic --visibility ontic
+# uploading 12/12 files, 3.4/3.4 MB
+# published depth-eval version 20261007T153000Z (12 files)
+# https://pages.onticlabs.io/depth-eval/
+
+ontic-pages list                     # the pages you may open, their visibility and current version
+ontic-pages list --name depth-eval   # its versions, newest first, * marks the current one
+ontic-pages info depth-eval          # everything page.json says, plus the versions
+ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
+ontic-pages share depth-eval public  # private, ontic or public
+ontic-pages url depth-eval           # its URL
+```
+
+Anyone with an `@onticlabs.io` account may create a page; only its owner (the publisher of the
+current version) may publish a new version of it, `share` it or `set-current`. A publish uploads
+up to 8 files at a time (each retried twice), at most 5000 files and 5 GB per version; nothing
+becomes visible until every file is in the bucket with the size announced.
+
+### Without the gateway: `--direct`
+
+Admins with a bucket key can skip the gateway: `publish`, `list`, `info`, `share` and
+`set-current` take `--direct` (or set `ONTIC_PAGES_DIRECT=1`) and then read and write the bucket
+with your own key. `published_by` is then `ONTIC_PAGES_EMAIL`, else git `user.email`, and the
+owner rules above are not checked. The key goes in the config below.
 
 ## Configure
 
 Set environment variables, or put the same values in `~/.config/ontic-pages/config.toml`
-(environment variables win):
+(environment variables win). Only `url` matters for the default mode; the rest is for
+`--direct` and for running the gateway.
 
 | config.toml key | environment variable | meaning |
 |---|---|---|
+| `url` | `ONTIC_PAGES_URL` | where the gateway is (its scheme and host, the apex), default `https://pages.onticlabs.io` |
+| `direct` | `ONTIC_PAGES_DIRECT` | `1`: use your own bucket key, not the gateway |
 | `bucket` | `ONTIC_PAGES_BUCKET` | the S3-compatible bucket, default `ontic-pages` |
 | `endpoint` | `ONTIC_PAGES_ENDPOINT` | its S3 endpoint, default `https://s3.eu-central-003.backblazeb2.com` |
 | `region` | `ONTIC_PAGES_REGION` | its region, default `eu-central-003` |
 | `prefix` | `ONTIC_PAGES_PREFIX` | key prefix, default none (pages sit at the bucket root) |
-| `url` | `ONTIC_PAGES_URL` | where the gateway is (its scheme and host, the apex), default `https://pages.onticlabs.io` |
 | `content_suffix` | `ONTIC_PAGES_CONTENT_SUFFIX` | pages are served from `<name>.<content_suffix>`; default the host of `url` |
-| `email` | `ONTIC_PAGES_EMAIL` | who you are, recorded as `published_by`; default git `user.email`, else `$USER` |
-| `access_key_id` | `AWS_ACCESS_KEY_ID` | key id |
-| `secret_access_key` | `AWS_SECRET_ACCESS_KEY` | key secret |
-
-The team uses its own private Backblaze B2 bucket, `ontic-pages`, and the defaults
-point at it, so the only thing to configure is a key:
+| `email` | `ONTIC_PAGES_EMAIL` | `--direct` only: recorded as `published_by`; default git `user.email`, else `$USER` |
+| `access_key_id` | `AWS_ACCESS_KEY_ID` | key id (`--direct`, the gateway) |
+| `secret_access_key` | `AWS_SECRET_ACCESS_KEY` | key secret (`--direct`, the gateway) |
+| `token_secret` | `ONTIC_PAGES_TOKEN_SECRET` | the gateway only: signs the command line's tokens |
 
 ```toml
-# ~/.config/ontic-pages/config.toml  (chmod 600: it holds the key)
+# ~/.config/ontic-pages/config.toml  (chmod 600 when it holds a key)
 access_key_id = "<key id>"
 secret_access_key = "<application key>"
 ```
@@ -51,38 +104,21 @@ Without credentials in either place, boto3's usual lookup applies (`AWS_PROFILE`
 
 ### Keys
 
-Two keys, both scoped to the `ontic-pages` bucket, created with the `b2` command
-line (`uv tool install b2`, then `b2 account authorize` with a key that may create
-keys). Neither can delete files, which matches the tool: it never deletes.
+Keys are scoped to the `ontic-pages` bucket, created with the `b2` command line
+(`uv tool install b2`, then `b2 account authorize` with a key that may create keys). None can
+delete files, which matches the tool: it never deletes.
 
 ```sh
-# For publishing (people and agents): read and write.
-b2 key create --bucket ontic-pages ontic-pages-publish listBuckets,listFiles,readFiles,writeFiles
-# For the gateway on the team box: also read and write (the Share panel writes
-# <name>/visibility), so the publish key's capabilities, under its own name.
+# For the gateway on the team box: read and write (page.json, current, visibility, and the
+# presigned upload URLs it signs for the files).
 b2 key create --bucket ontic-pages ontic-pages-gateway-rw listBuckets,listFiles,readFiles,writeFiles
+# Only for admins who use --direct: the same capabilities.
+b2 key create --bucket ontic-pages ontic-pages-publish listBuckets,listFiles,readFiles,writeFiles
 ```
 
 Each prints a key id and an application key once; they go into
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (or the config file above, or the
 gateway's `deploy/secrets.env`).
-
-## Use
-
-```sh
-# Publish a folder (it should have an index.html) or one .html file (served as index.html).
-ontic-pages publish ./report --name depth-eval --description "Depth eval, Oct 7" \
-    --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic --visibility ontic
-# published depth-eval version 20261007T153000Z (12 files)
-# https://pages.onticlabs.io/depth-eval/
-
-ontic-pages list                     # every page, its visibility and current version
-ontic-pages list --name depth-eval   # its versions, newest first, * marks the current one
-ontic-pages info depth-eval          # everything page.json says, plus the versions
-ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
-ontic-pages share depth-eval public  # private, ontic or public
-ontic-pages url depth-eval           # its URL
-```
 
 Page names are lowercase letters, digits, `.` and `-`, starting and ending with
 a letter or digit (each page is also a host name); `public`, `oauth2` and
@@ -102,9 +138,9 @@ root of its own host, so `/img/a.png` and `img/a.png` both work.
 Visibility belongs to the page, not to a version. `publish --visibility` sets it;
 a later publish without the flag keeps it. `share <name> <level>`, or the Share
 panel in the bar (for the page's owner), changes it.
-For `private`, the publisher is matched by email, so publish with the address you
-sign in with (`ONTIC_PAGES_EMAIL`, or `git config user.email`); `publish` and
-`share` print who that is. The info page (`/<name>/_info`) always needs sign-in,
+For `private`, the publisher is matched by email: through the gateway that is always the
+address you signed in with; with `--direct` it is `ONTIC_PAGES_EMAIL` (or `git config
+user.email`), so use the address you sign in with. `publish` and `share` print who that is. The info page (`/<name>/_info`) always needs sign-in,
 even for public pages.
 
 ## In the bucket
@@ -123,7 +159,7 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 | `name` | the page name |
 | `version` | the version id, a UTC timestamp like `20261007T153000Z` |
 | `published_at` | the same time in ISO 8601 |
-| `published_by` | `ONTIC_PAGES_EMAIL`, else git `user.email`, else `$USER` |
+| `published_by` | the signed-in email (with `--direct`: `ONTIC_PAGES_EMAIL`, else git `user.email`, else `$USER`) |
 | `description` | from `--description`, may be empty |
 | `meta` | map of strings from `--meta key=value` |
 | `git` | `{remote, branch, commit, dirty}` of the directory you published from, or null outside a git repo |
@@ -141,7 +177,8 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
   `/<name>/_v/<version>/<path>` the same for one version; `/<name>/_info` is a plain
   page with what page.json says and every version; `/_api/pages/<name>` gives the
   page facts as JSON, and `POST /_api/pages/<name>/visibility` changes visibility
-  (owner only, from the bar only).
+  (owner only, from the bar or the command line). The command line uses the rest of `/_api/`
+  (list, info, current, publish) and `/_cli/login`; see `gateway.py` for the routes.
 - **The page's own host** (`<name>.pages.onticlabs.io`): `/<path>` serves the
   current version's files (content types, `index.html` for folders, Range requests
   for video, ETags and 304s), `/_v/<version>/<path>` a given version, cached for a
@@ -155,7 +192,9 @@ Escape or a click elsewhere, in the page too, closes a menu. The page fades in o
 it is ready, a spinner shows only when it takes a while, and when a new version is
 published while you look, it fades in where you were. The gateway adds one small
 script (the bridge) to a page's HTML when it is shown in the bar, and only then;
-stored files are never changed.
+stored files are never changed. A plain click on a link to `https://pages.onticlabs.io/...`
+inside a page (another page, the listing) opens it in the whole tab: the bridge hands it to the
+bar, since the apex refuses to be shown in a frame.
 
 Sign-in is not done here: oauth2-proxy owns `/oauth2/*`, and the gateway asks it who
 a request's cookie belongs to. See [deploy/README.md](deploy/README.md).
@@ -170,6 +209,15 @@ ontic-pages gateway --port 8790 --local-as you@onticlabs.io
 # open http://localhost:8790/
 ```
 
+To try the command line against it, give it a token secret and point the command line there
+(with `--local-as`, Allow on the login page signs you in as that address):
+
+```sh
+ONTIC_PAGES_TOKEN_SECRET="$(openssl rand -base64 32)" ontic-pages gateway --port 8790 --local-as you@onticlabs.io
+ONTIC_PAGES_URL=http://localhost:8790 ontic-pages login
+```
+
+Without `ONTIC_PAGES_TOKEN_SECRET` the gateway answers 503 to the command line's routes.
 `--url` and `--content-suffix` set the apex and the page hosts otherwise
 (`ONTIC_PAGES_URL`, `ONTIC_PAGES_CONTENT_SUFFIX`); `--cache-mb` (256) and
 `--cache-file-mb` (4) size the memory cache of version files; `--auth-url` is
@@ -209,4 +257,5 @@ skips versions already copied. `--source-bucket` and `--dest-bucket` default to
 
 The agent skill at `~/.claude/skills/ontic-pages` (a chezmoi-managed dotfile)
 still describes the old `ontic pages publish`. It must be changed to
-`ontic-pages publish --name <name>` in the chezmoi source.
+`ontic-pages publish --name <name>` in the chezmoi source, and say that a person (or agent)
+signs in once with `ontic-pages login` instead of holding a bucket key.

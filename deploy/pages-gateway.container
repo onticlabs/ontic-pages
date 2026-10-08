@@ -2,8 +2,10 @@
 # /etc/containers/systemd/pages-gateway.container; `systemctl daemon-reload`
 # generates pages-gateway.service. The image is built by deploy/pages.sh.
 #
-# It reads the bucket, and writes one file per page (<name>/visibility) when the owner changes
-# it in the Share panel. It asks oauth2-proxy who a request's cookie belongs to.
+# It reads the bucket and writes each version's page.json, `current` and `visibility`; the files
+# themselves go from the publisher's laptop straight to the bucket with presigned PUT URLs it
+# hands out. It asks oauth2-proxy who a request's cookie belongs to, and checks the command
+# line's tokens with ONTIC_PAGES_TOKEN_SECRET.
 [Unit]
 Description=ontic-pages gateway
 StartLimitIntervalSec=0
@@ -20,8 +22,8 @@ Group=10003
 # ONTIC_PAGES_BUCKET (ontic-pages), ONTIC_PAGES_ENDPOINT, ONTIC_PAGES_REGION, the optional
 # ONTIC_PAGES_PREFIX (empty: pages sit at the bucket root), and AWS_ACCESS_KEY_ID /
 # AWS_SECRET_ACCESS_KEY of a key scoped to the ontic-pages bucket that can read and write but
-# not delete. Written by pages.sh, mode 600 root:root, read by podman before the container
-# starts.
+# not delete, and ONTIC_PAGES_TOKEN_SECRET. Written by pages.sh, mode 600 root:root, read by
+# podman before the container starts.
 EnvironmentFile=/etc/ontic-pages/gateway.env
 Environment=TZ=Europe/Berlin
 

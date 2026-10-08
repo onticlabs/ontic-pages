@@ -21,6 +21,7 @@ IMAGE=localhost/ontic-pages:latest
 UNITS="pages.network pages-gateway.container pages-oauth2-proxy.container"
 REQUIRED="GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET OAUTH2_COOKIE_SECRET OAUTH2_EMAIL_DOMAIN"
 REQUIRED="$REQUIRED ONTIC_PAGES_BUCKET ONTIC_PAGES_ENDPOINT ONTIC_PAGES_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
+REQUIRED="$REQUIRED ONTIC_PAGES_TOKEN_SECRET"
 OPTIONAL="ONTIC_PAGES_PREFIX"
 
 die() { echo "pages.sh: $*" >&2; exit 1; }
@@ -41,6 +42,8 @@ check_secrets() {
         [ -n "$v" ] || die "$SRC: $key is empty"
         case "$v" in *\"*|*\\*|*\|*|*\&*) die "$SRC: $key contains one of \" \\ | &" ;; esac
     done
+    [ "$(val ONTIC_PAGES_TOKEN_SECRET | tr -d '\n' | wc -c | tr -d ' ')" -ge 32 ] \
+        || die "$SRC: ONTIC_PAGES_TOKEN_SECRET is too short (openssl rand -base64 32)"
     echo "ok    $SRC is complete (no value printed)"
 }
 

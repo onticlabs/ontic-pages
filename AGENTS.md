@@ -1,13 +1,21 @@
 # ontic-pages: agent notes
 
-Simple HTML hosting for the team: `ontic-pages publish|list|set-current|url|gateway`.
+Simple HTML hosting for the team: `ontic-pages login|publish|list|info|share|set-current|url|gateway`.
+The commands talk to the gateway with a token from `login`; `--direct` uses a bucket key instead.
 See README.md for what it does and deploy/README.md for how it is hosted.
 
 ## Layout
 
 - `src/ontic_pages/config.py`: config file and environment variables.
 - `src/ontic_pages/store.py`: bucket layout, the S3 calls, content types, name rules.
-- `src/ontic_pages/publish.py`: collecting files, git metadata, writing a version.
+- `src/ontic_pages/publish.py`: collecting files, the file path rules, git metadata, writing a
+  version (page.json, visibility, current); shared by `--direct` and the gateway's commit.
+- `src/ontic_pages/uploads.py`: publishing through the gateway, its side: checks the file list,
+  picks the version, presigned PUT URLs, the size check and the commit.
+- `src/ontic_pages/tokens.py`: the command line's tokens (HMAC signed, 30 days) and the login
+  codes of the browser hand-off. In memory only.
+- `src/ontic_pages/remote.py`: the command line's side of the gateway: the token file, JSON
+  calls, `login`, and uploading files to the presigned URLs.
 - `src/ontic_pages/info.py`: the facts behind `ontic-pages info`, the gateway's `/<name>/_info` page
   and the short-name helper.
 - `src/ontic_pages/gateway.py`: the HTTP server (stdlib `http.server`): routing on the apex and
@@ -15,13 +23,18 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   oauth2-proxy.
 - `src/ontic_pages/auth.py`: who is asking (the oauth2-proxy `/oauth2/auth` subrequest, or
   `--local-as`), the access rule, the write rate limit. Never read identity request headers.
+  A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
+  Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files, page state).
 - `src/ontic_pages/shell.py` and `src/ontic_pages/static/`: the bar (shell HTML, bar.js,
-  bar.css) and the bridge script added to framed HTML. Static files are package data, served
+  bar.css), the bridge script added to framed HTML, and the command line's login page
+  (login.js). Static files are package data, served
   at content-hashed URLs. User text goes into the bar with textContent, never innerHTML.
 - `src/ontic_pages/cli.py`: argparse commands.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
-- `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used).
+- `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
+  `helpers.upload_server` takes its presigned PUTs). `test_js.py` runs bridge.js and bar.js in
+  node (skipped without node).
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules
@@ -33,6 +46,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - Standard library first. The only runtime dependency is boto3; ask before adding another.
 - Keep it small. Provenance is metadata in `page.json`, never checked.
 - The tool never deletes anything from the bucket.
+- File bytes never pass through the gateway (Caddy caps bodies at 64 KB on purpose): they go to
+  presigned URLs. Only the gateway holds a bucket key in normal use.
 - Add or update a test for every behavior change; when you use a new boto3 call, add it to the fake.
 - Never commit `deploy/secrets.env` or any credential.
 - Never use em dashes in any text.
