@@ -57,10 +57,17 @@ def test_refuses_bad_input(store, tmp_path):
         publish(store, tmp_path / "notes.txt", "notes")
     with pytest.raises(ValueError, match="bad page name"):
         publish(store, tmp_path / "notes.txt", "Bad Name")
+    for name in ("under_score", "trailing-", "a..b", "oauth2"):  # not a host name, or reserved
+        with pytest.raises(ValueError, match="bad page name"):
+            publish(store, tmp_path / "notes.txt", name)
     (tmp_path / "f").mkdir()
     (tmp_path / "f" / "page.json").write_text("{}")
     with pytest.raises(SystemExit, match="reserved"):
         publish(store, tmp_path / "f", "f")
+    (tmp_path / "g" / "_v").mkdir(parents=True)
+    (tmp_path / "g" / "_v" / "x.html").write_text("x")
+    with pytest.raises(SystemExit, match="_v folder is reserved"):
+        publish(store, tmp_path / "g", "g")
 
 
 def test_same_second_gets_next_version(store, site):

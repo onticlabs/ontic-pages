@@ -67,6 +67,8 @@ def collect(source: Path) -> dict[str, Path]:
     for reserved in (META_FILE, "_info"):
         if reserved in files:
             raise SystemExit(f"{source}: a top-level {reserved} is reserved by ontic-pages")
+    if any(rel.startswith("_v/") for rel in files):
+        raise SystemExit(f"{source}: a top-level _v folder is reserved by ontic-pages (versions)")
     return files
 
 
