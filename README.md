@@ -1,9 +1,11 @@
 # ontic-pages
 
 Simple HTML hosting for the Ontic Labs team. Publish a folder or one HTML file
-under a name, and it is served at `https://pages.onticlabs.io/<name>/`. Each page
-is private (only you), ontic (the signed-in team, the default) or public (anyone
-with the link). Each publish is a new version; nothing is ever deleted.
+under a name, and it is served at `https://pages.onticlabs.io/<name>/`, inside a
+slim bar (title menu with the versions, Share panel), from its own host
+`https://<name>.pages.onticlabs.io/`. Each page is private (only you), ontic (the
+signed-in team, the default) or public (anyone with the link). Each publish is a
+new version; nothing is ever deleted.
 
 The only "provenance" is metadata: who published, when, an optional
 description, any `--meta key=value` you pass (for example `model=sha256:...`), and
@@ -29,7 +31,8 @@ Set environment variables, or put the same values in `~/.config/ontic-pages/conf
 | `endpoint` | `ONTIC_PAGES_ENDPOINT` | its S3 endpoint, default `https://s3.eu-central-003.backblazeb2.com` |
 | `region` | `ONTIC_PAGES_REGION` | its region, default `eu-central-003` |
 | `prefix` | `ONTIC_PAGES_PREFIX` | key prefix, default none (pages sit at the bucket root) |
-| `url` | `ONTIC_PAGES_URL` | where the gateway is, default `https://pages.onticlabs.io` |
+| `url` | `ONTIC_PAGES_URL` | where the gateway is (its scheme and host, the apex), default `https://pages.onticlabs.io` |
+| `content_suffix` | `ONTIC_PAGES_CONTENT_SUFFIX` | pages are served from `<name>.<content_suffix>`; default the host of `url` |
 | `email` | `ONTIC_PAGES_EMAIL` | who you are, recorded as `published_by`; default git `user.email`, else `$USER` |
 | `access_key_id` | `AWS_ACCESS_KEY_ID` | key id |
 | `secret_access_key` | `AWS_SECRET_ACCESS_KEY` | key secret |
@@ -55,8 +58,9 @@ keys). Neither can delete files, which matches the tool: it never deletes.
 ```sh
 # For publishing (people and agents): read and write.
 b2 key create --bucket ontic-pages ontic-pages-publish listBuckets,listFiles,readFiles,writeFiles
-# For the gateway on the team box: read only.
-b2 key create --bucket ontic-pages ontic-pages-gateway listBuckets,listFiles,readFiles
+# For the gateway on the team box: also read and write (the Share panel writes
+# <name>/visibility), so the publish key's capabilities, under its own name.
+b2 key create --bucket ontic-pages ontic-pages-gateway-rw listBuckets,listFiles,readFiles,writeFiles
 ```
 
 Each prints a key id and an application key once; they go into
@@ -77,14 +81,15 @@ ontic-pages list --name depth-eval   # its versions, newest first, * marks the c
 ontic-pages info depth-eval          # everything page.json says, plus the versions
 ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
 ontic-pages share depth-eval public  # private, ontic or public
-ontic-pages url depth-eval           # the /public/ URL for public pages
+ontic-pages url depth-eval           # its URL
 ```
 
-Page names are lowercase letters, digits, `.`, `_` and `-`; `public` and
-`page.json` are reserved (as are `_info` and `_health`). Publishing again under
-the same name adds a version and makes it current. Hidden files (`.git`,
-`.DS_Store`) are skipped. Links inside a page should be relative (`img/a.png`,
-not `/img/a.png`), because the page lives under `/<name>/`.
+Page names are lowercase letters, digits, `.` and `-`, starting and ending with
+a letter or digit (each page is also a host name); `public`, `oauth2` and
+`page.json` are reserved. Publishing again under the same name adds a version and
+makes it current. Hidden files (`.git`, `.DS_Store`) are skipped, and a top-level
+`_v` folder is refused (`/_v/<version>/` addresses versions). A page sits at the
+root of its own host, so `/img/a.png` and `img/a.png` both work.
 
 ## Who can open a page
 
@@ -92,10 +97,11 @@ not `/img/a.png`), because the page lives under `/<name>/`.
 |---|---|---|
 | `private` | only the publisher of the current version, signed in with that Google account | `/<name>/` |
 | `ontic` (default) | anyone signed in with an `@onticlabs.io` Google account | `/<name>/` |
-| `public` | anyone with the link, no sign-in | `/public/<name>/` (and `/<name>/` when signed in) |
+| `public` | anyone with the link, no sign-in | `/<name>/` (old `/public/<name>/` links redirect there) |
 
 Visibility belongs to the page, not to a version. `publish --visibility` sets it;
-a later publish without the flag keeps it. `share <name> <level>` changes it.
+a later publish without the flag keeps it. `share <name> <level>`, or the Share
+panel in the bar (for the page's owner), changes it.
 For `private`, the publisher is matched by email, so publish with the address you
 sign in with (`ONTIC_PAGES_EMAIL`, or `git config user.email`); `publish` and
 `share` print who that is. The info page (`/<name>/_info`) always needs sign-in,
@@ -128,25 +134,46 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 
 ## The gateway
 
-`ontic-pages gateway --port 8790` serves the bucket: `GET /` lists the pages you
-may open (name, visibility badge, description, publish time, publisher, a link to
-its info page; long names and descriptions are cut, the full text shows on hover),
-`GET /<name>/...` serves files of the current version with the right content
-type, `index.html` for folders, Range requests for video, and 404 otherwise.
-`GET /<name>/_info` is a plain HTML page with what page.json says (visibility,
-metadata, git remote and commit linked to GitHub) and every version, the
-current one marked. `GET /public/<name>/...` serves public pages without
-sign-in. The gateway does no sign-in itself: on the team box Caddy sends
-`/public/*` straight to it and everything else through oauth2-proxy (Google
-sign-in, `@onticlabs.io` only), and the gateway decides from the
-`X-Forwarded-Email` header oauth2-proxy sets. See [deploy/README.md](deploy/README.md).
+`ontic-pages gateway` serves the bucket on two kinds of host:
 
-To look at pages locally, run it with your own key, tell it who you are (there is
-no oauth2-proxy to say so), and open `http://127.0.0.1:8790/`:
+- **The apex** (`pages.onticlabs.io`): `/` lists the pages you may open;
+  `/<name>/<path>` is the bar around a frame showing `<path>` of the page, and
+  `/<name>/_v/<version>/<path>` the same for one version; `/<name>/_info` is a plain
+  page with what page.json says and every version; `/_api/pages/<name>` gives the
+  page facts as JSON, and `POST /_api/pages/<name>/visibility` changes visibility
+  (owner only, from the bar only).
+- **The page's own host** (`<name>.pages.onticlabs.io`): `/<path>` serves the
+  current version's files (content types, `index.html` for folders, Range requests
+  for video, ETags and 304s), `/_v/<version>/<path>` a given version, cached for a
+  year. Opened directly in a browser it redirects to the bar; `?raw=1` opens it
+  without the bar.
+
+The bar: the home link, the title menu (who published, when, the description, the
+versions, Copy link, Open without the bar, Page info, All pages), an "old version"
+marker, your initial (or Sign in), and Share (owner, general access, Copy link).
+Escape or a click elsewhere, in the page too, closes a menu. The page fades in once
+it is ready, a spinner shows only when it takes a while, and when a new version is
+published while you look, it fades in where you were. The gateway adds one small
+script (the bridge) to a page's HTML when it is shown in the bar, and only then;
+stored files are never changed.
+
+Sign-in is not done here: oauth2-proxy owns `/oauth2/*`, and the gateway asks it who
+a request's cookie belongs to. See [deploy/README.md](deploy/README.md).
+
+To look at pages locally, run it with your own key and tell it who you are (there is
+no oauth2-proxy to say so); it then answers at `http://localhost:<port>/` with
+pages at `http://<name>.localhost:<port>/` (browsers send `*.localhost` to this
+machine):
 
 ```sh
 ontic-pages gateway --port 8790 --local-as you@onticlabs.io
+# open http://localhost:8790/
 ```
+
+`--url` and `--content-suffix` set the apex and the page hosts otherwise
+(`ONTIC_PAGES_URL`, `ONTIC_PAGES_CONTENT_SUFFIX`); `--cache-mb` (256) and
+`--cache-file-mb` (4) size the memory cache of version files; `--auth-url` is
+oauth2-proxy's `/oauth2/auth`.
 
 ## What the old `ontic pages` had that this does not
 
@@ -155,8 +182,8 @@ store: provenance was recorded and checked, versions were chained jobs with
 `rollback`, `--from` inputs were linked to jobs, and there were a Share panel,
 a viewer frame, pinned comments on the page, a subdomain per page
 (`<job-id>.pages.onticlabs.io`), a verified disk cache and a landing page fed
-by announcements. None of that is here. `set-current` replaces rollback, and
-`share` with three levels replaces the Share panel. That code lives on the
+by announcements. The bar, the Share panel (three levels) and a host per page (by
+name) are back; comments are not yet. `set-current` replaces rollback. That code lives on the
 ontic-cli branch `main-with-pages-and-viewer`.
 
 `scripts/migrate_old_pages.py` copies the old pages from the old jobs in `ontic-r3`
