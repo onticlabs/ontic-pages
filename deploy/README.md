@@ -3,8 +3,9 @@
 The gateway runs on the team box (`ontic-vps`, 159.195.206.154) behind the same
 Caddy and the same kind of Google sign-in that Olympus and Atlas use.
 
-    browser -> caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190 -> pages-gateway :8790 (pages network)
-    gateway -> bucket ontic-r3, prefix pages/, READ-ONLY key
+    /public/*, /_health  browser -> caddy :443 -> pages-gateway 127.0.0.1:8790                 (no sign-in)
+    everything else     browser -> caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190 -> pages-gateway (pages network)
+    gateway -> bucket ontic-pages (its own private B2 bucket), READ-ONLY key
 
 | File | What it is |
 |---|---|
@@ -49,12 +50,11 @@ deploy.
    gh repo deploy-key add <(echo '<the ssh-ed25519 line>') --repo onticlabs/ontic-pages --title "ontic-vps pages"
    ```
 
-2. **Read-only bucket key.** Bucket `ontic-r3`, prefix `pages/`, capabilities
-   `readFiles,listFiles` only. The old gateway key was limited to `jobs/`, so it
-   cannot be reused.
+2. **Read-only bucket key.** Scoped to the `ontic-pages` bucket, no write and no
+   delete. The old gateway key (bucket `ontic-r3`, prefix `jobs/`) is not used.
 
    ```sh
-   b2 key create --bucket ontic-r3 --name-prefix 'pages/' ontic-pages-gateway readFiles,listFiles
+   b2 key create --bucket ontic-pages ontic-pages-gateway listBuckets,listFiles,readFiles
    ```
 
    Its two values go into `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` of `secrets.env`.
@@ -64,15 +64,44 @@ deploy.
 
 4. **DNS.** The A record `pages` -> 159.195.206.154 already exists.
 
+## Who can open what
+
+Each page has a visibility in `<name>/visibility` in the bucket: `private`, `ontic`
+(the default when the file is absent) or `public`. The gateway stays a plain
+file server; access follows from routing plus one header:
+
+- Caddy sends `/public/*` and `/_health` straight to the gateway, skipping
+  oauth2-proxy. On `/public/<name>/` the gateway serves only public pages and
+  redirects every other page to `/<name>/`, which goes through sign-in.
+  `/public/<name>/_info` also redirects: metadata stays behind sign-in.
+- Everything else goes through oauth2-proxy (Google sign-in, `@onticlabs.io`
+  only), which sets `X-Forwarded-Email`. `ontic` pages need that header to end
+  in `@onticlabs.io` (`--email-domain`), `private` pages need it to equal the
+  `published_by` of the current version, `public` pages need nothing. Otherwise
+  the answer is 403. The listing at `/` hides private pages from everyone but
+  their publisher.
+
+Because the gateway decides on `X-Forwarded-Email`, two things must hold:
+
+1. **oauth2-proxy sets it.** `pass_user_headers = true` in
+   `oauth2-proxy.cfg.example` does that; keep it. Caddy strips the header from
+   every incoming request on both routes, so a browser cannot send its own.
+2. **Only Caddy and oauth2-proxy can reach the gateway.** Its port is published
+   on the box's loopback only (`127.0.0.1:8790`, for Caddy) and is reachable on
+   the `ontic-pages` podman network (for oauth2-proxy). Never publish it on a
+   public interface: anyone who can reach it can claim any email. Root on the
+   box can, which is accepted.
+
 ## What changed from the old `ontic pages` deploy
 
 - **Path-based, one host.** Pages live at `https://pages.onticlabs.io/<name>/`,
   not `https://<job-id>.pages.onticlabs.io/`. No wildcard site, no on-demand
   certificates, no `tls-ask` endpoint. Old `<job-id>` links stop working.
 - **Sign-in in front, not inside.** oauth2-proxy proxies to the gateway (as for
-  Olympus). The gateway does no authorization; it logs `X-Forwarded-Email`.
-  Every page is visible to every signed-in `@onticlabs.io` account; there are
-  no private or public pages any more.
+  Olympus). The gateway never talks to oauth2-proxy; it only reads
+  `X-Forwarded-Email` (see above). Visibility is per page, not per version, and
+  private means "only the publisher", with no share lists. Public pages live
+  under `/public/<name>/`, not on their own subdomain.
 - **Stateless gateway.** No disk cache, no comments database, no broker
   identity, no announce index. It reads `current` and the files from the bucket
   (and keeps `current` for 5 seconds).

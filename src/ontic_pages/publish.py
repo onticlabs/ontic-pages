@@ -10,7 +10,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .store import Store, check_name
+from .store import Store, check_name, check_visibility
 
 META_FILE = "page.json"
 
@@ -64,8 +64,9 @@ def collect(source: Path) -> dict[str, Path]:
             files[rel.as_posix()] = path
     if not files:
         raise SystemExit(f"{source}: nothing to publish")
-    if META_FILE in files:
-        raise SystemExit(f"{source}: a top-level {META_FILE} is reserved for the page metadata")
+    for reserved in (META_FILE, "_info"):
+        if reserved in files:
+            raise SystemExit(f"{source}: a top-level {reserved} is reserved by ontic-pages")
     return files
 
 
@@ -85,11 +86,16 @@ def publish(
     name: str,
     description: str = "",
     meta: dict[str, str] | None = None,
+    visibility: str | None = None,
+    published_by: str | None = None,
     cwd: Path | None = None,
     now: datetime | None = None,
 ) -> dict:
-    """Upload the files, then page.json, then flip `current`. Returns page.json."""
+    """Upload the files, then page.json, then the visibility (only when given; a later publish
+    without it keeps the level), then flip `current`. Returns page.json."""
     check_name(name)
+    if visibility is not None:
+        check_visibility(visibility)
     files = collect(source)
     version = new_version(store, name, now)
     for rel, path in files.items():
@@ -101,12 +107,14 @@ def publish(
         "published_at": datetime.strptime(version, "%Y%m%dT%H%M%SZ")
         .replace(tzinfo=UTC)
         .isoformat(),
-        "published_by": publisher(),
+        "published_by": published_by or publisher(),
         "description": description,
         "meta": dict(meta or {}),
         "git": git_provenance(cwd or Path.cwd()),
         "files": len(files),
     }
     store.put(store.key(name, version, META_FILE), json.dumps(page, indent=2).encode())
+    if visibility is not None:
+        store.set_visibility(name, visibility)
     store.set_current(name, version)
     return page

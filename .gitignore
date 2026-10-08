@@ -7,3 +7,4 @@ _cli_snapshot/
 secrets.env
 *.egg-info/
 dist/
+migration-mapping.json

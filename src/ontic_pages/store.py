@@ -1,6 +1,8 @@
-"""The bucket layout, on any S3-compatible store:
+"""The bucket layout, on any S3-compatible store (the prefix is empty by default, so pages sit
+at the bucket root):
 
     <prefix><name>/current                   the current version id, as text
+    <prefix><name>/visibility                private, ontic or public (absent means ontic)
     <prefix><name>/<version>/page.json       metadata of that version
     <prefix><name>/<version>/<files...>      the page itself
 
@@ -20,6 +22,10 @@ from .config import Config
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 VERSION_RE = re.compile(r"^\d{8}T\d{6}Z$")
+VISIBILITIES = ("private", "ontic", "public")
+DEFAULT_VISIBILITY = "ontic"
+# Path segments the gateway uses for itself, so no page may take them as its name.
+RESERVED_NAMES = {"public", "_info", "_health", "page.json"}
 
 # Types mimetypes gets wrong or does not know on some systems.
 EXTRA_TYPES = {
@@ -46,12 +52,18 @@ def content_type(path: str) -> str:
 
 
 def check_name(name: str) -> str:
-    if not NAME_RE.match(name):
+    if not NAME_RE.match(name) or name in RESERVED_NAMES:
         raise ValueError(
             f"bad page name {name!r}: use lowercase letters, digits, '.', '_' or '-' "
-            "(up to 64 characters, starting with a letter or digit)"
+            "(up to 64 characters, starting with a letter or digit; not public or page.json)"
         )
     return name
+
+
+def check_visibility(level: str) -> str:
+    if level not in VISIBILITIES:
+        raise ValueError(f"visibility must be one of {', '.join(VISIBILITIES)}, got {level!r}")
+    return level
 
 
 def make_client(cfg: Config):
@@ -69,7 +81,7 @@ def is_missing(err: ClientError) -> bool:
 
 
 class Store:
-    def __init__(self, client, bucket: str, prefix: str = "pages/"):
+    def __init__(self, client, bucket: str, prefix: str = ""):
         if not bucket:
             raise SystemExit("no bucket configured: set ONTIC_PAGES_BUCKET (see README)")
         self.client, self.bucket, self.prefix = client, bucket, prefix
@@ -131,6 +143,17 @@ class Store:
 
     def set_current(self, name: str, version: str) -> None:
         self.put(self.key(name, "current"), version.encode())
+
+    def visibility(self, name: str) -> str:
+        """The page's level; absent means ontic, anything unreadable means private."""
+        text = self.read_text(self.key(name, "visibility"))
+        if text is None:
+            return DEFAULT_VISIBILITY
+        level = text.strip()
+        return level if level in VISIBILITIES else "private"
+
+    def set_visibility(self, name: str, level: str) -> None:
+        self.put(self.key(name, "visibility"), check_visibility(level).encode())
 
     def meta(self, name: str, version: str) -> dict:
         text = self.read_text(self.key(name, version, "page.json"))

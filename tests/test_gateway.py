@@ -21,9 +21,13 @@ def server(store):
     srv.server_close()
 
 
-def get(server, path, headers=None, method="GET"):
+TEAM = {"X-Forwarded-Email": "tester@onticlabs.io"}
+
+
+def get(server, path, headers=None, method="GET", who=TEAM):
+    """A request as oauth2-proxy forwards it (signed in as tester@onticlabs.io by default)."""
     conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
-    conn.request(method, path, headers=headers or {})
+    conn.request(method, path, headers={**(who or {}), **(headers or {})})
     resp = conn.getresponse()
     body = resp.read()
     conn.close()
@@ -83,9 +87,9 @@ def test_listing(server, store, site):
     status, headers, body = get(server, "/")
     assert status == 200 and headers["Content-Type"] == "text/html; charset=utf-8"
     text = body.decode()
-    assert '<a href="/report/">report</a>' in text
+    assert '<a href="/report/"><span title="report">report</span></a>' in text
     assert "first &lt;b&gt;bold&lt;/b&gt;" in text
-    assert "2026-10-07T15:30:00+00:00" in text and "another one" in text
+    assert "2026-10-07 15:30" in text and "another one" in text
 
 
 def test_range_and_head(server, store, site):
@@ -99,10 +103,10 @@ def test_range_and_head(server, store, site):
 
 
 def test_current_is_cached(store, site, s3):
-    from ontic_pages.gateway import CurrentCache
+    from ontic_pages.gateway import PageCache
 
     publish(store, site, "report", now=T1)
-    cache = CurrentCache(store, ttl=60)
+    cache = PageCache(store, ttl=60)
     s3.calls.clear()
-    assert cache.get("report") == cache.get("report") == "20261007T153000Z"
-    assert s3.calls == ["get_object"]
+    assert cache.get("report") == cache.get("report") == ("20261007T153000Z", "ontic", "")
+    assert s3.calls == ["get_object", "get_object"]  # current and visibility, once

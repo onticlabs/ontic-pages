@@ -17,7 +17,7 @@ def s3():
 
 @pytest.fixture
 def store(s3):
-    return Store(s3, "test-bucket", "pages/")
+    return Store(s3, "test-bucket")
 
 
 @pytest.fixture
