@@ -13,6 +13,7 @@ from pathlib import Path
 from .store import Store, check_name, check_visibility
 
 META_FILE = "page.json"
+MAX_PATH_BYTES = 900  # S3 keys are at most 1024 bytes, with the name and version in front
 
 
 def git(cwd: Path, *args: str) -> str | None:
@@ -64,22 +65,77 @@ def collect(source: Path) -> dict[str, Path]:
             files[rel.as_posix()] = path
     if not files:
         raise SystemExit(f"{source}: nothing to publish")
-    for reserved in (META_FILE, "_info"):
-        if reserved in files:
-            raise SystemExit(f"{source}: a top-level {reserved} is reserved by ontic-pages")
-    if any(rel.startswith("_v/") for rel in files):
-        raise SystemExit(f"{source}: a top-level _v folder is reserved by ontic-pages (versions)")
+    try:
+        check_paths(files)
+    except ValueError as err:
+        raise SystemExit(f"{source}: {err}") from None
     return files
 
 
-def new_version(store: Store, name: str, now: datetime | None = None) -> str:
-    """A UTC timestamp that is not taken yet (one second later on a clash)."""
+def check_paths(paths) -> None:
+    """The file paths a version may have (the gateway checks them too): relative, no '.', '..',
+    empty or hidden parts, and nothing the gateway answers itself."""
+    for rel in paths:
+        parts = rel.split("/")
+        if (
+            not rel
+            or len(rel.encode()) > MAX_PATH_BYTES
+            or "\\" in rel
+            or any(not p or p in (".", "..") or p.startswith(".") for p in parts)
+            or any(ord(c) < 32 or ord(c) == 127 for c in rel)
+        ):
+            raise ValueError(f"bad file path {rel!r}")
+        if rel in (META_FILE, "_info"):
+            raise ValueError(f"a top-level {rel} is reserved by ontic-pages")
+        if parts[0] == "_v":
+            raise ValueError("a top-level _v folder is reserved by ontic-pages (versions)")
+
+
+def new_version(
+    store: Store, name: str, now: datetime | None = None, taken: set[str] | None = None
+) -> str:
+    """A UTC timestamp that is not taken yet (one second later on a clash). `taken`: versions
+    already promised to an upload that has not finished."""
     now = (now or datetime.now(UTC)).replace(microsecond=0)
     while True:
         version = now.strftime("%Y%m%dT%H%M%SZ")
-        if not store.exists(store.key(name, version, META_FILE)):
+        if version not in (taken or ()) and not store.exists(store.key(name, version, META_FILE)):
             return version
         now += timedelta(seconds=1)
+
+
+def page_record(
+    name: str,
+    version: str,
+    published_by: str,
+    description: str,
+    meta: dict,
+    git: dict | None,
+    files: int,
+) -> dict:
+    """page.json of a version."""
+    return {
+        "name": name,
+        "version": version,
+        "published_at": datetime.strptime(version, "%Y%m%dT%H%M%SZ")
+        .replace(tzinfo=UTC)
+        .isoformat(),
+        "published_by": published_by,
+        "description": description,
+        "meta": dict(meta or {}),
+        "git": git,
+        "files": files,
+    }
+
+
+def finish(store: Store, page: dict, visibility: str | None) -> None:
+    """After the files: page.json, then the visibility (only when given; a later publish without
+    it keeps the level), then flip `current`."""
+    name, version = page["name"], page["version"]
+    store.put(store.key(name, version, META_FILE), json.dumps(page, indent=2).encode())
+    if visibility is not None:
+        store.set_visibility(name, visibility)
+    store.set_current(name, version)
 
 
 def publish(
@@ -103,20 +159,9 @@ def publish(
     for rel, path in files.items():
         with path.open("rb") as fh:
             store.put(store.key(name, version, rel), fh)
-    page = {
-        "name": name,
-        "version": version,
-        "published_at": datetime.strptime(version, "%Y%m%dT%H%M%SZ")
-        .replace(tzinfo=UTC)
-        .isoformat(),
-        "published_by": published_by or publisher(),
-        "description": description,
-        "meta": dict(meta or {}),
-        "git": git_provenance(cwd or Path.cwd()),
-        "files": len(files),
-    }
-    store.put(store.key(name, version, META_FILE), json.dumps(page, indent=2).encode())
-    if visibility is not None:
-        store.set_visibility(name, visibility)
-    store.set_current(name, version)
+    page = page_record(
+        name, version, published_by or publisher(), description, meta or {},
+        git_provenance(cwd or Path.cwd()), len(files),
+    )  # fmt: skip
+    finish(store, page, visibility)
     return page
