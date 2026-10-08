@@ -11,6 +11,7 @@ def test_defaults_without_file_or_env(tmp_path):
     assert cfg.prefix == DEFAULT_PREFIX == ""
     assert cfg.url == DEFAULT_URL
     assert cfg.page_url("report") == "https://pages.onticlabs.io/report/"
+    assert cfg.content_suffix == ""
 
 
 def test_file_then_env_override(tmp_path):
@@ -28,12 +29,14 @@ def test_file_then_env_override(tmp_path):
         "ONTIC_PAGES_BUCKET": "from-env",
         "AWS_ACCESS_KEY_ID": "id-from-env",
         "ONTIC_PAGES_URL": "http://localhost:8790/",
+        "ONTIC_PAGES_CONTENT_SUFFIX": "localhost:8790",
     }
     cfg = load_config(path, env=env)
     assert cfg.bucket == "from-env"
     assert cfg.access_key_id == "id-from-env"
     assert cfg.endpoint == "https://s3.example.com"
     assert cfg.page_url("a") == "http://localhost:8790/a/"
+    assert cfg.content_suffix == "localhost:8790"
 
 
 def test_unknown_key_is_refused(tmp_path):

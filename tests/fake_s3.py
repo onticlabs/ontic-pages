@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
 
@@ -10,6 +11,10 @@ from botocore.exceptions import ClientError
 
 def _error(code: str, op: str) -> ClientError:
     return ClientError({"Error": {"Code": code, "Message": code}}, op)
+
+
+def _etag(data: bytes) -> str:
+    return f'"{hashlib.md5(data).hexdigest()}"'
 
 
 class FakeS3:
@@ -36,14 +41,15 @@ class FakeS3:
         self.calls.append("head_object")
         if (Bucket, Key) not in self.objects:
             raise _error("404", "HeadObject")
-        return {"ContentLength": len(self.objects[(Bucket, Key)][0])}
+        data = self.objects[(Bucket, Key)][0]
+        return {"ContentLength": len(data), "ETag": _etag(data)}
 
     def get_object(self, Bucket, Key, Range=None):
         self.calls.append("get_object")
         if (Bucket, Key) not in self.objects:
             raise _error("NoSuchKey", "GetObject")
         data, ctype = self.objects[(Bucket, Key)]
-        out = {"ContentType": ctype}
+        out = {"ContentType": ctype, "ETag": _etag(data)}
         if Range:
             m = re.fullmatch(r"bytes=(\d*)-(\d*)", Range)
             start = int(m.group(1)) if m.group(1) else len(data) - int(m.group(2))

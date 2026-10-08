@@ -5,6 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import helpers  # noqa: E402
 from fake_s3 import FakeS3  # noqa: E402
 
 from ontic_pages.store import Store  # noqa: E402
@@ -18,6 +19,20 @@ def s3():
 @pytest.fixture
 def store(s3):
     return Store(s3, "test-bucket")
+
+
+@pytest.fixture
+def serve(store):
+    """Start gateways on the fake store (helpers.start keywords); all stop after the test."""
+    servers = []
+
+    def start(**kwargs):
+        servers.append(helpers.start(store, **kwargs))
+        return servers[-1]
+
+    yield start
+    for srv in servers:
+        helpers.stop(srv)
 
 
 @pytest.fixture

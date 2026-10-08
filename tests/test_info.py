@@ -1,11 +1,9 @@
-import threading
 from datetime import UTC, datetime
 
 import pytest
-from test_gateway import get
+from helpers import request
 
 from ontic_pages.cli import main
-from ontic_pages.gateway import make_server
 from ontic_pages.info import github_url, short
 from ontic_pages.publish import publish
 from ontic_pages.store import Store
@@ -56,17 +54,12 @@ def test_page_json_fields(store, site, monkeypatch):
     assert "inputs" not in saved
 
 
-def test_info_page(store, site, monkeypatch):
+def test_info_page(store, site, monkeypatch, serve):
     publish_two(store, site, monkeypatch)
-    srv = make_server(store, "127.0.0.1", 0, ttl=0)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    try:
-        status, headers, body = get(srv, "/report/_info")
-        listing = get(srv, "/")[2].decode()
-        assert get(srv, "/nope/_info")[0] == 404
-    finally:
-        srv.shutdown()
-        srv.server_close()
+    srv = serve()
+    status, headers, body = request(srv, "/report/_info")
+    listing = request(srv, "/")[2].decode()
+    assert request(srv, "/nope/_info")[0] == 404
     text = body.decode()
     assert status == 200 and headers["Content-Type"] == "text/html; charset=utf-8"
     assert "<script" not in text

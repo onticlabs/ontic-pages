@@ -1,18 +1,17 @@
-import threading
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 import pytest
-from test_gateway import get
+from helpers import DOCUMENT, FRAME, ORIGIN, content, request
 
 from ontic_pages.cli import main
-from ontic_pages.gateway import make_server
 from ontic_pages.publish import publish
 from ontic_pages.store import Store
 
 T1 = datetime(2026, 10, 7, 15, 30, tzinfo=UTC)
-OWNER = {"X-Forwarded-Email": "owner@onticlabs.io"}
-OTHER = {"X-Forwarded-Email": "other@onticlabs.io"}
-OUTSIDER = {"X-Forwarded-Email": "someone@gmail.com"}
+OWNER = "owner@onticlabs.io"
+OTHER = "other@onticlabs.io"
+OUTSIDER = "someone@gmail.com"
 
 
 def test_visibility_file_and_default(store, s3, site):
@@ -50,9 +49,9 @@ def test_cli_share_url_list(cli_env, site, capsys, monkeypatch):
 
     main(["share", "report", "public"])
     out = capsys.readouterr().out
-    assert "report is now public" in out and "https://pages.example.org/public/report/" in out
+    assert "report is now public" in out and "https://pages.example.org/report/" in out
     main(["url", "report"])
-    assert capsys.readouterr().out.strip() == "https://pages.example.org/public/report/"
+    assert capsys.readouterr().out.strip() == "https://pages.example.org/report/"
 
     main(["share", "report", "ontic"])
     capsys.readouterr()
@@ -70,93 +69,98 @@ def test_cli_share_url_list(cli_env, site, capsys, monkeypatch):
 
 
 @pytest.fixture
-def pages(store, site):
+def pages(store, site, serve):
     """One page per level, all published by owner@onticlabs.io."""
     for name, level in (("pub", "public"), ("team", "ontic"), ("mine", "private")):
         publish(store, site, name, f"{level} page", visibility=level,
-                published_by="owner@onticlabs.io", now=T1)  # fmt: skip
-    srv = make_server(store, "127.0.0.1", 0, ttl=0)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield srv
-    srv.shutdown()
-    srv.server_close()
+                published_by=OWNER, now=T1)  # fmt: skip
+    return serve()
+
+
+def sign_in(url: str) -> str:
+    return f"{ORIGIN}/oauth2/start?rd={quote(url, safe='')}"
+
+
+def opens(server, name, who) -> tuple[int, int, int]:
+    """Status of the shell, of the page in the frame, and of a file asked for directly."""
+    return (
+        request(server, f"/{name}/", who=who)[0],
+        content(server, name, "/", who=who, headers=FRAME)[0],
+        content(server, name, "/style.css", who=who)[0],
+    )
 
 
 def test_public_page(pages):
-    # Caddy sends /public/* without oauth2-proxy: no email at all.
-    assert get(pages, "/public/pub/", who=None)[::2] == (200, b"<h1>version one</h1>")
-    assert get(pages, "/public/pub/style.css", who=None)[0] == 200
-    status, headers, _ = get(pages, "/public/pub", who=None)
-    assert (status, headers["Location"]) == (301, "/public/pub/")
-    # The signed-in path works for public pages too.
-    assert get(pages, "/pub/", who=OUTSIDER)[0] == 200
+    for who in (None, OUTSIDER, OTHER):
+        assert opens(pages, "pub", who) == (200, 200, 200)
+    assert content(pages, "pub", "/?raw=1", who=None, headers=DOCUMENT)[0] == 200
+    # Old /public/ links still work.
+    status, headers, _ = request(pages, "/public/pub", who=None)
+    assert (status, headers["Location"]) == (301, "/pub")
     # Metadata stays behind sign-in.
-    status, headers, _ = get(pages, "/public/pub/_info", who=None)
-    assert (status, headers["Location"]) == (302, "/pub/_info")
-
-
-def test_public_path_redirects_other_levels(pages):
-    for name in ("team", "mine"):
-        status, headers, _ = get(pages, f"/public/{name}/img/dot.png?x=1", who=None)
-        assert (status, headers["Location"]) == (302, f"/{name}/img/dot.png?x=1")
-    assert get(pages, "/public/ghost/", who=None)[0] == 404
-    assert get(pages, "/public/%2e%2e/team/", who=None)[0] == 404
+    status, headers, _ = request(pages, "/pub/_info", who=None)
+    assert (status, headers["Location"]) == (302, sign_in(f"{ORIGIN}/pub/_info"))
+    assert request(pages, "/pub/_info", who=OUTSIDER)[0] == 200
 
 
 def test_ontic_page(pages):
-    status, _, body = get(pages, "/team/", who=None)
+    status, headers, _ = request(pages, "/team/docs/?a=1", who=None)
+    assert (status, headers["Location"]) == (302, sign_in(f"{ORIGIN}/team/docs/?a=1"))
+    assert content(pages, "team", "/", who=None, headers=FRAME)[0] == 401
+    # Opened without the bar and signed out: sign in, then back to that address.
+    status, headers, _ = content(pages, "team", "/?raw=1", who=None, headers=DOCUMENT)
+    assert (status, headers["Location"]) == (302, sign_in("https://team.pages.test/?raw=1"))
+    assert opens(pages, "team", OUTSIDER) == (403, 403, 403)
+    assert opens(pages, "team", OTHER) == (200, 200, 200)
+    assert request(pages, "/team/_info", who=OTHER)[0] == 200
+    status, _, body = request(pages, "/team/", who=OUTSIDER)
     assert status == 403 and b"ontic page" in body
-    assert get(pages, "/team/", who=OUTSIDER)[0] == 403
-    assert get(pages, "/team/", who={"X-Forwarded-Email": " "})[0] == 403
-    assert get(pages, "/team/", who=OTHER)[0] == 200
-    assert get(pages, "/team/_info", who=OTHER)[0] == 200
 
 
 def test_private_page(pages):
-    assert get(pages, "/mine/", who=OWNER)[0] == 200
-    assert get(pages, "/mine/", who={"X-Forwarded-Email": "Owner@OnticLabs.io"})[0] == 200
-    status, _, body = get(pages, "/mine/", who=OTHER)
+    assert opens(pages, "mine", OWNER) == (200, 200, 200)
+    assert opens(pages, "mine", "Owner@OnticLabs.io") == (200, 200, 200)
+    assert opens(pages, "mine", OTHER) == (403, 403, 403)
+    assert request(pages, "/mine/_info", who=OTHER)[0] == 403
+    assert request(pages, "/mine/", who=None)[0] == 302
+    status, _, body = request(pages, "/mine/", who=OTHER)
     assert status == 403 and b"private page" in body
-    assert get(pages, "/mine/_info", who=OTHER)[0] == 403
-    assert get(pages, "/mine/", who=None)[0] == 403
+    # Access is checked before a 304 too.
+    match = {"If-None-Match": content(pages, "mine", "/style.css", who=OWNER)[1]["ETag"]}
+    assert content(pages, "mine", "/style.css", who=OWNER, headers=match)[0] == 304
+    assert content(pages, "mine", "/style.css", who=OTHER, headers=match)[0] == 403
+    assert content(pages, "mine", "/style.css", who=None, headers=match)[0] == 302
+
+
+def test_identity_headers_are_ignored(pages):
+    forged = {"X-Forwarded-Email": OWNER, "X-Auth-Request-Email": OWNER}
+    assert request(pages, "/mine/", who=None, headers=forged)[0] == 302
+    assert content(pages, "mine", "/", who=OTHER, headers={**forged, **FRAME})[0] == 403
 
 
 def test_listing_hides_private_and_shows_badges(pages):
-    owner = get(pages, "/", who=OWNER)[2].decode()
-    other = get(pages, "/", who=OTHER)[2].decode()
+    owner = request(pages, "/", who=OWNER)[2].decode()
+    other = request(pages, "/", who=OTHER)[2].decode()
     for name in ("pub", "team", "mine"):
         assert f'<a href="/{name}/">' in owner
     assert '<a href="/mine/">' not in other and '<a href="/team/">' in other
     assert '<span class="badge public">public</span>' in other
-    assert '<a href="/public/pub/">public link</a>' in other
     assert '<span class="badge ontic">ontic</span>' in other
     assert '<span class="badge private">private</span>' in owner
-    assert "/public/team/" not in other
 
 
-def test_listing_shortens_long_names(store, site):
+def test_listing_shortens_long_names(store, site, serve):
     name = "a-really-long-page-name-that-goes-past-the-limit"
     publish(store, site, name, "d" * 100, now=T1)
-    srv = make_server(store, "127.0.0.1", 0, ttl=0)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    try:
-        text = get(srv, "/")[2].decode()
-    finally:
-        srv.shutdown()
-        srv.server_close()
+    text = request(serve(), "/")[2].decode()
     assert f'<span title="{name}">{name[:31]}…</span>' in text
     assert f'<span title="{"d" * 100}">{"d" * 59}…</span>' in text
 
 
-def test_local_as(store, site, cli_env):
-    publish(store, site, "mine", visibility="private", published_by="owner@onticlabs.io")
-    srv = make_server(store, "127.0.0.1", 0, ttl=0, local_email="owner@onticlabs.io")
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    try:
-        assert get(srv, "/mine/", who=None)[0] == 200
-        assert get(srv, "/mine/", who=OTHER)[0] == 403  # a sent header still wins
-    finally:
-        srv.shutdown()
-        srv.server_close()
+def test_local_as(store, site, serve, cli_env):
+    publish(store, site, "mine", visibility="private", published_by=OWNER)
+    srv = serve(identity=None, local_email=OWNER)
+    assert request(srv, "/mine/", who=None)[0] == 200
+    assert request(srv, "/mine/", who=OTHER)[0] == 200  # cookies do not matter locally
     with pytest.raises(SystemExit, match="loopback|this machine"):
-        main(["gateway", "--host", "0.0.0.0", "--local-as", "owner@onticlabs.io"])
+        main(["gateway", "--host", "0.0.0.0", "--local-as", OWNER])
