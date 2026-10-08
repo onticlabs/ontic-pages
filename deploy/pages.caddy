@@ -1,15 +1,26 @@
-# ontic-pages: https://pages.onticlabs.io/<name>/ and https://pages.onticlabs.io/public/<name>/
+# ontic-pages: the bar at https://pages.onticlabs.io/<name>/, each page's content at
+# https://<name>.pages.onticlabs.io/
 #
-#   /public/*, /_health  caddy :443 -> pages-gateway 127.0.0.1:8790             (no sign-in)
-#   everything else      caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190 -> pages-gateway
+#   pages.onticlabs.io/oauth2/*   caddy :443 -> pages-oauth2-proxy 127.0.0.1:4190  (Google sign-in)
+#   pages.onticlabs.io/*          caddy :443 -> pages-gateway 127.0.0.1:8790       (listing, bar, API)
+#   *.pages.onticlabs.io/*        caddy :443 -> pages-gateway 127.0.0.1:8790       (page content)
 #
 # Install as /etc/caddy/conf.d/pages.caddy (the main Caddyfile imports conf.d/*.caddy).
-# This replaces the old file, which also had a `*.pages.onticlabs.io` block.
 #
-# The gateway decides who may open a page from X-Forwarded-Email, so that header must only
-# ever come from oauth2-proxy. Caddy strips it (and its relatives) from every request, on
-# both routes; oauth2-proxy sets it again for signed-in requests. On /public/* nobody is
-# signed in, and the gateway serves only pages whose visibility is public there.
+# ONE GLOBAL OPTION LIVES OUTSIDE THIS FILE. Certificates for *.pages.onticlabs.io are issued
+# on demand, one per page on its first visit, and Caddy first asks the gateway whether that
+# page exists. That needs, in the global options block of /etc/caddy/Caddyfile:
+#
+#     {
+#         on_demand_tls {
+#             ask http://127.0.0.1:8790/_tls-ask
+#         }
+#     }
+#
+# deploy/pages.sh refuses to install without it (deploy/README.md has the command).
+#
+# The gateway asks oauth2-proxy who a cookie belongs to (/oauth2/auth) and never reads identity
+# headers from a request. Caddy strips them anyway, so that stays true for any upstream.
 (pages_strip_identity) {
 	header_up -X-Forwarded-Email
 	header_up -X-Forwarded-User
@@ -26,21 +37,54 @@
 pages.onticlabs.io {
 	encode zstd gzip
 
-	# The gateway is read-only; a small cap is a guard.
+	# The only writes are small JSON bodies to the API.
 	request_body {
 		max_size 64KB
 	}
 
-	@direct path /public/* /_health
-	handle @direct {
+	# Only for Caddy itself, on 127.0.0.1: it says which page names exist.
+	handle /_tls-ask {
+		respond 404
+	}
+
+	handle /oauth2/* {
+		reverse_proxy 127.0.0.1:4190 {
+			import pages_strip_identity
+		}
+	}
+
+	handle {
 		reverse_proxy 127.0.0.1:8790 {
 			flush_interval -1
 			import pages_strip_identity
 		}
 	}
 
+	log {
+		output stderr
+	}
+}
+
+# Every page, one certificate each, issued on its first visit once the gateway said the page
+# exists. Caddy keeps the browser's Host header, which is how the gateway knows the page.
+# Read-only: the gateway answers 405 to any write here.
+*.pages.onticlabs.io {
+	tls {
+		on_demand
+	}
+
+	encode zstd gzip
+
+	request_body {
+		max_size 64KB
+	}
+
+	handle /_tls-ask {
+		respond 404
+	}
+
 	handle {
-		reverse_proxy 127.0.0.1:4190 {
+		reverse_proxy 127.0.0.1:8790 {
 			flush_interval -1
 			import pages_strip_identity
 		}

@@ -10,8 +10,15 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `src/ontic_pages/publish.py`: collecting files, git metadata, writing a version.
 - `src/ontic_pages/info.py`: the facts behind `ontic-pages info`, the gateway's `/<name>/_info` page
   and the short-name helper.
-- `src/ontic_pages/gateway.py`: the read-only HTTP server (stdlib `http.server`). It decides
-  access from `X-Forwarded-Email` and the page's visibility only; sign-in stays in oauth2-proxy.
+- `src/ontic_pages/gateway.py`: the HTTP server (stdlib `http.server`): routing on the apex and
+  on page hosts (`<name>.<suffix>`), the API, file answers with ETags. Sign-in stays in
+  oauth2-proxy.
+- `src/ontic_pages/auth.py`: who is asking (the oauth2-proxy `/oauth2/auth` subrequest, or
+  `--local-as`), the access rule, the write rate limit. Never read identity request headers.
+- `src/ontic_pages/cache.py`: the in-memory caches (version files, page state).
+- `src/ontic_pages/shell.py` and `src/ontic_pages/static/`: the bar (shell HTML, bar.js,
+  bar.css) and the bridge script added to framed HTML. Static files are package data, served
+  at content-hashed URLs. User text goes into the bar with textContent, never innerHTML.
 - `src/ontic_pages/cli.py`: argparse commands.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used).

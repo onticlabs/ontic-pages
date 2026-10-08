@@ -21,11 +21,14 @@ from botocore.exceptions import ClientError
 from .config import Config
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+# New names must also work as a host name, since each page is served from <name>.<suffix>:
+# no underscores, and dot-separated parts that start and end with a letter or digit.
+HOST_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$")
 VERSION_RE = re.compile(r"^\d{8}T\d{6}Z$")
 VISIBILITIES = ("private", "ontic", "public")
 DEFAULT_VISIBILITY = "ontic"
 # Path segments the gateway uses for itself, so no page may take them as its name.
-RESERVED_NAMES = {"public", "_info", "_health", "page.json"}
+RESERVED_NAMES = {"public", "oauth2", "_info", "_health", "page.json"}
 
 # Types mimetypes gets wrong or does not know on some systems.
 EXTRA_TYPES = {
@@ -52,10 +55,11 @@ def content_type(path: str) -> str:
 
 
 def check_name(name: str) -> str:
-    if not NAME_RE.match(name) or name in RESERVED_NAMES:
+    if not NAME_RE.match(name) or not HOST_NAME_RE.match(name) or name in RESERVED_NAMES:
         raise ValueError(
-            f"bad page name {name!r}: use lowercase letters, digits, '.', '_' or '-' "
-            "(up to 64 characters, starting with a letter or digit; not public or page.json)"
+            f"bad page name {name!r}: use lowercase letters, digits, '.' or '-' "
+            "(up to 64 characters, starting and ending with a letter or digit; "
+            "not public, oauth2 or page.json)"
         )
     return name
 

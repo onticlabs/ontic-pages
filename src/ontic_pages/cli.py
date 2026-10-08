@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 from . import gateway
+from .auth import DEFAULT_AUTH_URL
+from .cache import MB
 from .config import Config, load_config
 from .info import history, info_text
 from .publish import publish
@@ -32,7 +34,7 @@ def open_store(args) -> tuple[Store, Config]:
 
 
 def url_for(store: Store, cfg: Config, name: str) -> str:
-    return cfg.page_url(name, public=store.visibility(name) == "public")
+    return cfg.page_url(name)
 
 
 def private_note(store: Store, name: str) -> None:
@@ -114,12 +116,22 @@ def cmd_url(args) -> None:
 
 
 def cmd_gateway(args) -> None:
-    store, _ = open_store(args)
+    store, cfg = open_store(args)
     if args.local_as and args.host not in ("127.0.0.1", "localhost", "::1"):
         raise SystemExit("--local-as is for a gateway on this machine only (--host 127.0.0.1)")
+    # Run locally, the apex is localhost and each page is <name>.localhost (browsers send
+    # *.localhost to this machine), over plain http.
+    url = args.url or (f"http://localhost:{args.port}" if args.local_as else cfg.url)
+    suffix = args.content_suffix or ("" if args.local_as and not args.url else cfg.content_suffix)
     gateway.serve(
-        store, args.host, args.port, args.cache_seconds, args.email_domain, args.local_as or ""
-    )
+        store, args.host, args.port,
+        site=gateway.Site(url.rstrip("/"), suffix, args.email_domain),
+        ttl=args.cache_seconds,
+        local_email=args.local_as or "",
+        auth_url=args.auth_url,
+        cache_bytes=int(args.cache_mb * MB),
+        file_bytes=int(args.cache_file_mb * MB),
+    )  # fmt: skip
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name")
     s.set_defaults(func=cmd_info)
 
-    s = sub.add_parser("url", help="print a page's URL (the /public/ one for public pages)")
+    s = sub.add_parser("url", help="print a page's URL")
     s.add_argument("name")
     s.set_defaults(func=cmd_url)
 
@@ -178,15 +190,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="how long a page's current version and visibility are remembered (default 5)",
     )
     s.add_argument(
+        "--url",
+        help="the apex, scheme and host (default ONTIC_PAGES_URL, or http://localhost:<port> "
+        "with --local-as)",
+    )
+    s.add_argument(
+        "--content-suffix",
+        help="pages are served from <name>.<suffix> (default ONTIC_PAGES_CONTENT_SUFFIX, "
+        "else the apex host)",
+    )
+    s.add_argument(
         "--email-domain",
         default="onticlabs.io",
-        help="ontic pages need an X-Forwarded-Email at this domain (default onticlabs.io)",
+        help="ontic pages need a signed-in email at this domain (default onticlabs.io)",
+    )
+    s.add_argument(
+        "--auth-url",
+        default=DEFAULT_AUTH_URL,
+        help=f"oauth2-proxy's auth endpoint, asked with the request's cookie "
+        f"(default {DEFAULT_AUTH_URL})",
+    )
+    s.add_argument(
+        "--cache-mb", type=float, default=256, help="memory for page files (default 256)"
+    )
+    s.add_argument(
+        "--cache-file-mb",
+        type=float,
+        default=4,
+        help="files larger than this are streamed, not kept in memory (default 4)",
     )
     s.add_argument(
         "--local-as",
         metavar="EMAIL",
-        help="for looking at pages on this machine: act as EMAIL when no X-Forwarded-Email "
-        "header is sent (loopback only)",
+        help="for looking at pages on this machine: act as EMAIL instead of asking "
+        "oauth2-proxy, at http://localhost:<port>/ (loopback only)",
     )
     s.set_defaults(func=cmd_gateway)
     return p

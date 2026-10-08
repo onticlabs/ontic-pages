@@ -1,4 +1,4 @@
-"""Where the pages live: bucket, endpoint, credentials and the public URL.
+"""Where the pages live: bucket, endpoint, credentials and the gateway's addresses.
 
 Read from ~/.config/ontic-pages/config.toml, then overridden by environment variables:
 
@@ -6,7 +6,10 @@ Read from ~/.config/ontic-pages/config.toml, then overridden by environment vari
     endpoint          ONTIC_PAGES_ENDPOINT   (default Backblaze B2 eu-central-003)
     region            ONTIC_PAGES_REGION     (default "eu-central-003")
     prefix            ONTIC_PAGES_PREFIX     (default none: pages sit at the bucket root)
-    url               ONTIC_PAGES_URL        (default "https://pages.onticlabs.io")
+    url               ONTIC_PAGES_URL        (default "https://pages.onticlabs.io"; the gateway's
+                                             apex: its scheme and host, the bar and the listing)
+    content_suffix    ONTIC_PAGES_CONTENT_SUFFIX  (default: the host of url; each page's content is
+                                             served from <name>.<content_suffix>)
     email             ONTIC_PAGES_EMAIL      (who you are; default: git user.email, else $USER)
     access_key_id     AWS_ACCESS_KEY_ID
     secret_access_key AWS_SECRET_ACCESS_KEY
@@ -33,6 +36,7 @@ ENV = {
     "region": "ONTIC_PAGES_REGION",
     "prefix": "ONTIC_PAGES_PREFIX",
     "url": "ONTIC_PAGES_URL",
+    "content_suffix": "ONTIC_PAGES_CONTENT_SUFFIX",
     "email": "ONTIC_PAGES_EMAIL",
     "access_key_id": "AWS_ACCESS_KEY_ID",
     "secret_access_key": "AWS_SECRET_ACCESS_KEY",
@@ -46,12 +50,13 @@ class Config:
     region: str = DEFAULT_REGION
     prefix: str = DEFAULT_PREFIX
     url: str = DEFAULT_URL
+    content_suffix: str = ""
     email: str | None = None
     access_key_id: str | None = None
     secret_access_key: str | None = None
 
-    def page_url(self, name: str, public: bool = False) -> str:
-        return f"{self.url.rstrip('/')}/{'public/' if public else ''}{name}/"
+    def page_url(self, name: str) -> str:
+        return f"{self.url.rstrip('/')}/{name}/"
 
 
 def config_path() -> Path:

@@ -2,7 +2,8 @@
 # /etc/containers/systemd/pages-gateway.container; `systemctl daemon-reload`
 # generates pages-gateway.service. The image is built by deploy/pages.sh.
 #
-# It only reads the bucket. Sign-in happens in front of it (oauth2-proxy).
+# It reads the bucket, and writes one file per page (<name>/visibility) when the owner changes
+# it in the Share panel. It asks oauth2-proxy who a request's cookie belongs to.
 [Unit]
 Description=ontic-pages gateway
 StartLimitIntervalSec=0
@@ -18,17 +19,17 @@ Group=10003
 
 # ONTIC_PAGES_BUCKET (ontic-pages), ONTIC_PAGES_ENDPOINT, ONTIC_PAGES_REGION, the optional
 # ONTIC_PAGES_PREFIX (empty: pages sit at the bucket root), and AWS_ACCESS_KEY_ID /
-# AWS_SECRET_ACCESS_KEY of a READ-ONLY key scoped to the ontic-pages bucket. Written by pages.sh,
-# mode 600 root:root, read by podman before the container starts.
+# AWS_SECRET_ACCESS_KEY of a key scoped to the ontic-pages bucket that can read and write but
+# not delete. Written by pages.sh, mode 600 root:root, read by podman before the container
+# starts.
 EnvironmentFile=/etc/ontic-pages/gateway.env
 Environment=TZ=Europe/Berlin
 
-# Two ways in, and only these two: Caddy on the host reaches 127.0.0.1:8790 for
-# /public/* and /_health, and oauth2-proxy reaches gateway:8790 on the pages network
-# for everything else. The gateway trusts X-Forwarded-Email, so never publish this
-# port on anything but loopback.
+# One way in: Caddy on the host, at 127.0.0.1:8790, for the apex and every page host, and for
+# its own /_tls-ask. Keep this port on loopback: /_tls-ask answers any Host but the public
+# ones, and Caddy is what refuses it from outside.
 PublishPort=127.0.0.1:8790:8790
-Exec=gateway --host 0.0.0.0 --port 8790 --email-domain onticlabs.io
+Exec=gateway --host 0.0.0.0 --port 8790 --auth-url http://oauth2-proxy:4180/oauth2/auth
 
 ReadOnly=true
 DropCapability=all

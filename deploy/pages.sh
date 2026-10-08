@@ -50,7 +50,9 @@ check_box() {
         || die "/etc/caddy/Caddyfile does not import conf.d/*; add the import or install $SITE by hand"
     caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
         || die "/etc/caddy/Caddyfile does not validate as it stands; fix that first"
-    echo "ok    podman, systemctl, caddy; Caddyfile imports conf.d and validates"
+    grep -Eq 'ask[[:space:]]+http://127\.0\.0\.1:8790/_tls-ask' /etc/caddy/Caddyfile \
+        || die "/etc/caddy/Caddyfile has no global 'on_demand_tls { ask http://127.0.0.1:8790/_tls-ask }'; add it (deploy/README.md)"
+    echo "ok    podman, systemctl, caddy; Caddyfile imports conf.d, asks /_tls-ask and validates"
 }
 
 write_etc() {
