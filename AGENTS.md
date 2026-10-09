@@ -41,11 +41,14 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   (login.js). Static files are package data, served at content-hashed URLs. User text goes into
   the bar with textContent, never innerHTML. A feature in files of its own is served as part of
   these or next to them (`shell.BUNDLES`):
-  - comments: `comments.js` and `comments.css` in the bar, `pins.js` after bridge.js. The page in
-    the frame never gets comment text or emails, only pins.
-  - edit text in place: `edit.js` (after bar.js, hooked in through `window.onticBar`), `edit.css`
-    (after bar.css) and `edit-bridge.js` (after bridge.js). Its bridge messages: `edit-mode`,
-    `edit-state`, `edits`.
+  - comments: `comments.js` and `comments.css` in the bar, `pins.js` after bridge.js (the pins,
+    the hover outline in comment mode, the outline of the open or hovered thread's element). The
+    page in the frame never gets comment text or emails, only pins and `highlight {id}`.
+  - edit text in place, always on for the owner (no Edit button): `edit.js` (after bar.js,
+    hooked in through `window.onticBar`), `edit.css` (after bar.css) and `edit-bridge.js`
+    (after bridge.js; it also hears `comment-mode` and pauses editing then). Its bridge
+    messages: `edit-mode` (on/off, `discard`, `save`), `edit-state` (the count, `save` for
+    Cmd/Ctrl+S), `edits`.
 - `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
   (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
   Edit the skill text there, never in an installed copy.

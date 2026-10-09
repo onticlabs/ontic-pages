@@ -96,8 +96,10 @@ Nothing is ever deleted. To change a page published earlier, fix the files and p
 under the same name; open viewers see the new version without reloading. In a new session, find
 the name with `ontic pages list`; never guess it from a file name.
 
-The owner can also fix text in the browser (Edit in the bar), which saves a new version, so your
-last published files may not be the newest. Before publishing a page again, run
+The owner can also fix text directly on the page in the browser (there is no Edit button: the
+plain texts are editable for them, and Save in the bar writes a new version), so your last
+published files may not be the newest. Only text written in the HTML file itself can be saved
+that way, not text a script puts on the page. Before publishing a page again, run
 `ontic pages info <name>`: if the current version's meta has `edited_from`, download it with
 `ontic pages pull <name> /tmp/<name>-current`, compare its HTML with your source
 (`diff -r`), carry those text changes into the source (or the code that generates it), then
@@ -105,12 +107,13 @@ publish.
 
 ## Comments
 
-Signed-in viewers pin comments to points on a page, reply and resolve them in the bar. They are
-feedback for you. Before publishing a new version of an existing page:
+Signed-in viewers attach comments to elements of a page (a paragraph, a heading, a figure),
+reply and resolve them in the bar. They are feedback for you. Before publishing a new version of
+an existing page:
 
 1. Read the open threads: `ontic pages comments <name>` (`--all` adds resolved ones, `--json`
-   gives everything as JSON). Each thread shows a short id, where on the page it points (path
-   and the quoted text) and every comment with its author.
+   gives everything as JSON). Each thread shows a short id, where on the page it points (path,
+   the element's tag and its quoted text) and every comment with its author.
 2. Address each open comment in the page.
 3. Publish the new version.
 4. Reply to every thread you handled, saying what you changed (or why you did not), and resolve

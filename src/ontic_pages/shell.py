@@ -8,8 +8,10 @@ and readiness to the shell by postMessage, and hands links to the apex to the sh
 them in the whole tab (the apex refuses to be framed). Stored files are never changed.
 
 Signed-in viewers also get the comments (static/comments.js and comments.css in the bar,
-static/pins.js served as the second part of the bridge): pins on the page, a thread popover and
-a side panel with every thread.
+static/pins.js served as the second part of the bridge): threads attached to elements of the
+page, with pins and outlines on it, a thread popover and a side panel with every thread. The
+owner, on the current version, can edit the page's text in place (static/edit.js in bar.js,
+static/edit-bridge.js in the bridge); there is no button for it.
 
 The command line's sign-in page (login_html, static/login.js) lives here too: it is the other
 HTML page on the apex with a script.

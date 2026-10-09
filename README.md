@@ -5,8 +5,9 @@ under a name, and it is served at `https://pages.onticlabs.io/<name>/`, inside a
 slim bar (title menu with the versions, comments, Share panel), from its own host
 `https://<name>.pages.onticlabs.io/`. Each page is private (only you), ontic (the
 signed-in team, the default) or public (anyone with the link). Each publish is a
-new version; nothing is ever deleted. The owner can also fix text right in the
-browser (Edit in the bar); Save writes that as a new version too.
+new version; nothing is ever deleted. The owner can also fix text right on the
+page in the browser (no Edit button: it is always on for them); Save writes that as a new
+version too.
 
 The only "provenance" is metadata: who published, when, an optional
 description, any `--meta key=value` you pass (for example `model=sha256:...`), and
@@ -69,8 +70,8 @@ ontic-pages pull depth-eval ./current   # download the current version (--versio
 
 ### Comments
 
-Signed-in viewers comment on a page in the bar: pinned to a point on it, with replies, resolve
-and reopen. The command line reads and answers them, so an agent can work through the feedback
+Signed-in viewers comment on a page in the bar: each thread is attached to an element of the
+page (a paragraph, a heading, a figure, a table cell), with replies, resolve and reopen. The command line reads and answers them, so an agent can work through the feedback
 before it publishes the next version:
 
 ```sh
@@ -97,12 +98,23 @@ it to see what is published now, for example after someone fixed text in the bro
 
 ### Edit text in place
 
-The owner of a page, looking at its current version in the bar, gets an **Edit** button. In edit
-mode every element that holds nothing but text (paragraphs, headings, list items, table cells,
-links, captions, ...) can be typed into, with a light dashed outline; links and buttons do
-nothing meanwhile. The bar shows how many texts changed, Save and Cancel; Escape or Cancel leaves
-without saving (it asks first when something changed). Save writes a new version and the page
-fades over to it; the older versions stay in the title menu.
+The owner of a page, looking at its current version in the bar, can fix its text right there:
+there is no Edit button, editing is always on for them. Every element that holds nothing but
+text (paragraphs, headings, list items, table cells, captions, ...) can be clicked into and typed
+over, with a text cursor and a light outline only while the pointer or the focus is on it.
+Interactive elements are never editable, nor anything inside them (links, buttons, `summary`,
+labels, form fields, elements with a `role` such as button or link, `onclick`, a `tabindex` (a
+container's `tabindex="-1"` aside), a pointer cursor, or the page's own `contenteditable`), so
+links, buttons and app controls work as usual. A text counts as changed only once someone typed in it, so text the page's own scripts
+update is never counted. Non-owners, and older versions, get nothing editable.
+
+The bar shows nothing about editing until a text changed; then "N changes", Save and Discard
+(its tooltip: "Text only. Saved as a new version; older versions stay in the title menu.").
+Discard asks first, in the bar. Cmd+S or Ctrl+S, in the page or the bar, saves; Escape in an
+edited text leaves it. Closing or reloading the tab with unsaved changes asks first. Comment mode
+pauses editing (a click makes a comment) and leaving it resumes. Save writes a new version and
+the page fades over to it; while there are unsaved changes, a version published meanwhile waits
+until they are saved or discarded.
 
 The gateway finds each changed text in the HTML file's source (its text only, not tags, scripts,
 styles or the title; as written or with `&amp;`-style references) and replaces just the changed
@@ -226,7 +238,7 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 
 `comments.json` is `{"threads": [...]}`; a thread has `id`, `version` (the one it was made on),
 `anchor` (where on the page: path, a CSS selector, the point within that element, a snippet of
-its text, and document x, y), `created_by`, `created_at`, `resolved_at`, `resolved_by` and
+its text, document x, y and, on newer threads, the element's tag name), `created_by`, `created_at`, `resolved_at`, `resolved_by` and
 `comments` (`id`, `author`, `body`, `created_at`, `deleted`). The gateway reads and rewrites the
 whole file under a lock per page and keeps it in memory for a few seconds; the bucket keeps the
 old copies. A deleted comment keeps its place with an empty body.
@@ -240,7 +252,7 @@ old copies. A deleted comment keeps its place with an empty body.
 | `published_at` | the same time in ISO 8601 |
 | `published_by` | the signed-in email (with `--direct`: `ONTIC_PAGES_EMAIL`, else git `user.email`, else `$USER`) |
 | `description` | from `--description`, may be empty |
-| `meta` | map of strings from `--meta key=value`; a version saved from Edit in the bar adds `edited_from` (the version it was edited from) |
+| `meta` | map of strings from `--meta key=value`; a version saved from text edited in the bar adds `edited_from` (the version it was edited from) |
 | `git` | `{remote, branch, commit, dirty}` of the directory you published from, or null outside a git repo |
 | `files` | how many files the version has |
 
@@ -269,19 +281,24 @@ old copies. A deleted comment keeps its place with an empty body.
 
 The bar: the home link, the title menu (who published, when, the description, the
 versions, Copy link, Open without the bar, Page info, All pages), an "old version"
-marker, the comment button (signed in only), Edit (the owner, on the current version; see Edit
-text in place), your initial (or Sign in), and Share (owner, general access, Copy link). Escape
-or a click elsewhere, in the page too, closes a menu.
+marker, the comment button (signed in only), the edit counter with Save and Discard (the owner,
+only once a text changed; see Edit text in place), your initial (or Sign in), and Share (owner,
+general access, Copy link). Escape or a click elsewhere, in the page too, closes a menu.
 
-Comments: the comment button turns on comment mode (a click on the page starts a thread there)
-and shows how many threads are open; its menu has Show all comments (a side panel, a bottom
-sheet on phones) and Show resolved. Pins sit where each thread points, kept in place while the
-page scrolls; a pin whose element is gone (or whose text changed) falls back to its old
-position only on the version it was made on, else the thread is listed in the panel only. A
-pin opens the thread: Resolve or Reopen, Copy link (`#comment=<id>` opens it), delete your own
+Comments: the comment button turns on comment mode and shows how many threads are open; its
+menu has Show all comments (a side panel, a bottom sheet on phones) and Show resolved. In
+comment mode the element under the pointer gets an outline (with its corners) and a small label
+naming it (tag and the start of its text); the document itself and wrappers covering most of the
+view are skipped, small inline elements count. A click attaches a new thread to that element
+and opens the composer next to it, the element still outlined. Pins sit where each thread
+points within its element and follow it while the page scrolls, resizes or changes; a pin whose
+element is gone (or whose text changed) falls back to its old position only on the version it
+was made on, else the thread is listed in the panel only. Opening a thread (its pin, its card in
+the panel, or a `#comment=<id>` link) outlines its element and brings it into view; the pointer
+on a pin or a card outlines it too, and each card names its element. A pin opens the thread: Resolve or Reopen, Copy link (`#comment=<id>` opens it), delete your own
 comment, reply (Enter sends, Shift+Enter is a new line). The bar refreshes them every 30
-seconds while visible. The page itself never sees comment text or emails, only the pins. The page fades in once
-it is ready, a spinner shows only when it takes a while, and when a new version is
+seconds while visible. The page itself never sees comment text or emails, only the pins and
+which one to outline. The page fades in once it is ready, a spinner shows only when it takes a while, and when a new version is
 published while you look, it fades in where you were. The gateway adds one small
 script (the bridge) to a page's HTML when it is shown in the bar, and only then;
 stored files are never changed. A plain click on a link to `https://pages.onticlabs.io/...`
