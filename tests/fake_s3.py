@@ -65,9 +65,13 @@ class FakeS3:
         return out
 
     def generate_presigned_url(self, ClientMethod, Params, ExpiresIn):
-        """A URL on `upload_base` (helpers.upload_server stores PUTs to it here), with what was
-        signed in the query."""
+        """A URL on `upload_base` (helpers.upload_server stores PUTs to it here and answers GETs
+        from here), with what was signed in the query."""
         self.calls.append("generate_presigned_url")
+        if ClientMethod == "get_object":
+            assert set(Params) == {"Bucket", "Key"}
+            query = urlencode({"get": 1, "expires": ExpiresIn})
+            return f"{self.upload_base}/{Params['Bucket']}/{quote(Params['Key'])}?{query}"
         assert ClientMethod == "put_object" and set(Params) == {"Bucket", "Key", "ContentType"}
         query = urlencode({"ct": Params["ContentType"], "expires": ExpiresIn})
         return f"{self.upload_base}/{Params['Bucket']}/{quote(Params['Key'])}?{query}"
