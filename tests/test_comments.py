@@ -58,6 +58,9 @@ def test_clean_anchor():
     assert out == {"path": "/a?b=1", "selector": "p", "fx": 1.0, "fy": 0.0,
                    "snippet": ("many spaces " + "z" * 100)[:60], "x": 0.0, "y": 1e7}  # fmt: skip
     assert clean_anchor({})["path"] == "/" and clean_anchor({})["fx"] == 0.5
+    assert "tag" not in clean_anchor({})  # older threads have no tag
+    assert clean_anchor({"tag": "FigCaption"})["tag"] == "figcaption"
+    assert "tag" not in clean_anchor({"tag": "<img onerror=x>"})
     # Too deep or too long: dropped, the pin falls back to x, y.
     deep = " > ".join(["div"] * 9)
     assert clean_anchor({"selector": deep})["selector"] == ""

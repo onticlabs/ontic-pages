@@ -81,6 +81,8 @@ def thread_text(thread: dict, short: str, current: str | None) -> str:
     anchor = thread.get("anchor") or {}
     state = "resolved" if thread.get("resolved") else "open"
     where = anchor.get("path") or "/"
+    if anchor.get("tag"):
+        where += f"  <{anchor['tag']}>"
     if anchor.get("snippet"):
         where += f'  "{anchor["snippet"]}"'
     if thread.get("version") and thread["version"] != current:

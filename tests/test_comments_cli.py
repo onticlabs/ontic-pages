@@ -26,7 +26,7 @@ def threads(store, site):
     v2 = publish(store, site, "report", "second", published_by=OWNER, now=T2)["version"]
     comments = Comments(store, ttl=0)
     a = comments.create("report", v2, ANCHOR, OTHER, "The title is wrong\nand too long")
-    b = comments.create("report", v1, {**ANCHOR, "path": "/docs/"}, OTHER, "Old remark")
+    b = comments.create("report", v1, {**ANCHOR, "path": "/docs/", "tag": "h1"}, OTHER, "Old remark")
     c = comments.create("report", v2, ANCHOR, OTHER, "Done already")
     comments.resolve("report", c["id"], True, OWNER)
     return comments, a["id"], b["id"], c["id"], v1
@@ -40,7 +40,7 @@ def test_comments_list(local, gateway_env, threads, capsys):
     assert out.startswith("2 threads on report (1 resolved, not shown: --all shows them)")
     assert f'{a[:6]}  open  /  "version one"\n' in out
     assert f"  {OTHER}, " in out and "    The title is wrong\n    and too long" in out
-    assert f"{b[:6]}  open  /docs/" in out and f"(made on version {v1})" in out
+    assert f'{b[:6]}  open  /docs/  <h1>  "version one"' in out and f"(made on version {v1})" in out
     assert c[:6] not in out and "Done already" not in out
 
     main(["comments", "report", "--all"])

@@ -16,8 +16,9 @@ body emptied), so the replies around it keep their place.
 
 An anchor is where a thread points, as the bridge (static/pins.js) computed it: path (on the
 page, without /_v/<version>), selector (a CSS path, at most 8 levels), fx and fy (the point
-within that element's box, 0 to 1), snippet (the element's text, at most 60 characters) and x, y
-(document pixels, the fallback for threads made on the version being viewed).
+within that element's box, 0 to 1), snippet (the element's text, at most 60 characters), x, y
+(document pixels, the fallback for threads made on the version being viewed) and, on newer
+threads, tag (the element's tag name, to name it in the bar).
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ PATH_LIMIT = 1024
 MAX_THREADS = 1000
 MAX_COMMENTS = 200
 ID_RE = re.compile(r"^[0-9a-f]{16}$")
+TAG_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 # Control characters but newline and tab (after CRLF is normalized), and the bidirectional
 # overrides that make text read differently from what it is.
 CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
@@ -86,7 +88,8 @@ def _text(value, what: str) -> str:
 
 def clean_anchor(value) -> dict:
     """Only the known fields, checked: strings cut, numbers clamped. A selector that is too
-    long or too deep is dropped (the pin then falls back to x, y)."""
+    long or too deep is dropped (the pin then falls back to x, y), and so is a tag that is not
+    a plain tag name."""
     if not isinstance(value, dict):
         raise Refused(400, "anchor: {path, selector, fx, fy, snippet, x, y}")
     path = _text(value.get("path"), "path") or "/"
@@ -96,7 +99,8 @@ def clean_anchor(value) -> dict:
     if len(selector) > SELECTOR_LIMIT or selector.count(">") >= SELECTOR_LEVELS:
         selector = ""
     snippet = " ".join(_text(value.get("snippet"), "snippet")[: 8 * SNIPPET_LIMIT].split())
-    return {
+    tag = _text(value.get("tag"), "tag").strip().lower()
+    anchor = {
         "path": path,
         "selector": selector,
         "fx": round(min(1.0, max(0.0, _number(value.get("fx", 0.5), "fx"))), 4),
@@ -105,6 +109,9 @@ def clean_anchor(value) -> dict:
         "x": round(min(1e7, max(0.0, _number(value.get("x", 0), "x"))), 1),
         "y": round(min(1e7, max(0.0, _number(value.get("y", 0), "y"))), 1),
     }
+    if TAG_RE.match(tag):  # optional: older threads have none
+        anchor["tag"] = tag
+    return anchor
 
 
 def display_name(email: str) -> str:
