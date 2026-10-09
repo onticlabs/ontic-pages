@@ -1,6 +1,6 @@
 # ontic-pages: agent notes
 
-Simple HTML hosting for the team: `ontic-pages login|publish|list|info|share|set-current|url|gateway`.
+Simple HTML hosting for the team: `ontic-pages login|publish|list|info|share|set-current|url|comments|comment|resolve|gateway`.
 The commands talk to the gateway with a token from `login`; `--direct` uses a bucket key instead.
 See README.md for what it does and deploy/README.md for how it is hosted.
 
@@ -26,10 +26,17 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files, page state).
+- `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
+  gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment
+  text and anchors; deleted comments stay as tombstones.
+- `src/ontic_pages/comments_cli.py`: the `comments`, `comment` and `resolve` commands (always
+  through the gateway; short thread ids; waits when rate limited).
 - `src/ontic_pages/shell.py` and `src/ontic_pages/static/`: the bar (shell HTML, bar.js,
-  bar.css), the bridge script added to framed HTML, and the command line's login page
-  (login.js). Static files are package data, served
-  at content-hashed URLs. User text goes into the bar with textContent, never innerHTML.
+  bar.css), the bridge script added to framed HTML, the comments (comments.js and comments.css
+  in the bar, pins.js served as the second part of the bridge script), and the command line's
+  login page (login.js). Static files are package data, served at content-hashed URLs. The page
+  in the frame never gets comment text or emails, only pins. User text goes into the bar with
+  textContent, never innerHTML.
 - `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
   (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
   Edit the skill text there, never in an installed copy.
@@ -37,7 +44,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
   `helpers.upload_server` takes its presigned PUTs). `test_js.py` runs bridge.js and bar.js in
-  node (skipped without node).
+  node, `test_comments_js.py` pins.js and comments.js with a small fake DOM (both skipped without
+  node).
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules

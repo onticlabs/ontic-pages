@@ -112,7 +112,7 @@ itself, the shell and the page's files alike, and before every answer (304s too)
   `private`: the `published_by` of the current version. Signed out, a page load
   redirects to `/oauth2/start?rd=<the page>`; signed in but not allowed is 403. The
   listing at `/` and `/<name>/_info` always need sign-in.
-- **Writes** (`POST /_api/...`: visibility, current version, publishing) are taken on the
+- **Writes** (`POST /_api/...`: visibility, current version, publishing, comments) are taken on the
   apex only, with a JSON body, 20 per minute per person, and either from the apex's own pages
   (`Sec-Fetch-Site: same-origin`, `Origin: https://pages.onticlabs.io`, cookie) or with a
   command line token.
@@ -133,6 +133,16 @@ itself, the shell and the page's files alike, and before every answer (304s too)
 - **Only Caddy reaches the gateway**, on the box's loopback (`127.0.0.1:8790`). Caddy
   answers `/_tls-ask` with 404 on both public sites; the gateway answers it only for
   a Host that is neither the apex nor a page host.
+
+## What changed with comments (phase 3)
+
+- **The gateway writes one more file per page**, `<name>/comments.json`, with the same key (no
+  new capability, nothing deleted; B2 keeps the overwritten copies). No new secret, no Caddy
+  change: comment bodies are small JSON under the 64 KB cap.
+- **Who.** Reading and writing comments needs sign-in and access to the page; signed-out
+  viewers of a public page get none. The same write checks and the same 20 writes a minute
+  apply. Reads from a page's own scripts (`Sec-Fetch-Site: same-site`) are refused.
+- **Old comments** from the SQLite database of the old deploy are not migrated.
 
 ## What changed with publishing through the gateway (phase 2)
 

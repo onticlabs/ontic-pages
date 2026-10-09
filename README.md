@@ -2,7 +2,7 @@
 
 Simple HTML hosting for the Ontic Labs team. Publish a folder or one HTML file
 under a name, and it is served at `https://pages.onticlabs.io/<name>/`, inside a
-slim bar (title menu with the versions, Share panel), from its own host
+slim bar (title menu with the versions, comments, Share panel), from its own host
 `https://<name>.pages.onticlabs.io/`. Each page is private (only you), ontic (the
 signed-in team, the default) or public (anyone with the link). Each publish is a
 new version; nothing is ever deleted.
@@ -64,6 +64,25 @@ ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer
 ontic-pages share depth-eval public  # private, ontic or public
 ontic-pages url depth-eval           # its URL
 ```
+
+### Comments
+
+Signed-in viewers comment on a page in the bar: pinned to a point on it, with replies, resolve
+and reopen. The command line reads and answers them, so an agent can work through the feedback
+before it publishes the next version:
+
+```sh
+ontic-pages comments depth-eval          # the open threads: short id, where, every comment
+ontic-pages comments depth-eval --all    # resolved ones too (--json: everything as JSON)
+ontic-pages comment depth-eval 3f9a1c "Fixed in the new version"   # reply; - reads stdin
+ontic-pages resolve depth-eval 3f9a1c    # or --reopen
+```
+
+A thread id may be shortened to its first characters (at least 4) while it stays unique. Anyone
+who may open a page and is signed in may read and add comments; signed out, even on a public
+page, there are none. Only its author deletes a comment, and it stays as "deleted". Comments
+always go through the gateway (never `--direct`); when the gateway says too many changes (20 a
+minute), these commands wait and try again.
 
 Anyone with an `@onticlabs.io` account may create a page; only its owner (the publisher of the
 current version) may publish a new version of it, `share` it or `set-current`. A publish uploads
@@ -173,10 +192,18 @@ even for public pages.
 
     <name>/current                 the current version id
     <name>/visibility              private, ontic or public (absent means ontic)
+    <name>/comments.json           the comment threads, written by the gateway only
     <name>/<version>/page.json     the metadata
     <name>/<version>/...           the files
 
 at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
+
+`comments.json` is `{"threads": [...]}`; a thread has `id`, `version` (the one it was made on),
+`anchor` (where on the page: path, a CSS selector, the point within that element, a snippet of
+its text, and document x, y), `created_by`, `created_at`, `resolved_at`, `resolved_by` and
+`comments` (`id`, `author`, `body`, `created_at`, `deleted`). The gateway reads and rewrites the
+whole file under a lock per page and keeps it in memory for a few seconds; the bucket keeps the
+old copies. A deleted comment keeps its place with an empty body.
 
 ### page.json
 
@@ -203,8 +230,10 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
   `/<name>/_v/<version>/<path>` the same for one version; `/<name>/_info` is a plain
   page with what page.json says and every version; `/_api/pages/<name>` gives the
   page facts as JSON, and `POST /_api/pages/<name>/visibility` changes visibility
-  (owner only, from the bar or the command line). The command line uses the rest of `/_api/`
-  (list, info, current, publish) and `/_cli/login`; see `gateway.py` for the routes.
+  (owner only, from the bar or the command line). `/_api/pages/<name>/comments` reads the
+  comment threads and takes new ones, replies, resolve and delete (signed in, from the bar or
+  the command line). The command line uses the rest of `/_api/` (list, info, current, publish)
+  and `/_cli/login`; see `gateway.py` for the routes.
 - **The page's own host** (`<name>.pages.onticlabs.io`): `/<path>` serves the
   current version's files (content types, `index.html` for folders, Range requests
   for video, ETags and 304s), `/_v/<version>/<path>` a given version, cached for a
@@ -213,8 +242,17 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 
 The bar: the home link, the title menu (who published, when, the description, the
 versions, Copy link, Open without the bar, Page info, All pages), an "old version"
-marker, your initial (or Sign in), and Share (owner, general access, Copy link).
-Escape or a click elsewhere, in the page too, closes a menu. The page fades in once
+marker, the comment button (signed in only), your initial (or Sign in), and Share (owner,
+general access, Copy link). Escape or a click elsewhere, in the page too, closes a menu.
+
+Comments: the comment button turns on comment mode (a click on the page starts a thread there)
+and shows how many threads are open; its menu has Show all comments (a side panel, a bottom
+sheet on phones) and Show resolved. Pins sit where each thread points, kept in place while the
+page scrolls; a pin whose element is gone (or whose text changed) falls back to its old
+position only on the version it was made on, else the thread is listed in the panel only. A
+pin opens the thread: Resolve or Reopen, Copy link (`#comment=<id>` opens it), delete your own
+comment, reply (Enter sends, Shift+Enter is a new line). The bar refreshes them every 30
+seconds while visible. The page itself never sees comment text or emails, only the pins. The page fades in once
 it is ready, a spinner shows only when it takes a while, and when a new version is
 published while you look, it fades in where you were. The gateway adds one small
 script (the bridge) to a page's HTML when it is shown in the bar, and only then;
@@ -256,8 +294,9 @@ store: provenance was recorded and checked, versions were chained jobs with
 `rollback`, `--from` inputs were linked to jobs, and there were a Share panel,
 a viewer frame, pinned comments on the page, a subdomain per page
 (`<job-id>.pages.onticlabs.io`), a verified disk cache and a landing page fed
-by announcements. The bar, the Share panel (three levels) and a host per page (by
-name) are back; comments are not yet. `set-current` replaces rollback. That code lives on the
+by announcements. The bar, the Share panel (three levels), a host per page (by
+name) and pinned comments (now in the bucket, not a database on the box) are back.
+`set-current` replaces rollback. That code lives on the
 ontic-cli branch `main-with-pages-and-viewer`.
 
 `scripts/migrate_old_pages.py` copies the old pages from the old jobs in `ontic-r3`
