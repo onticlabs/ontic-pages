@@ -16,6 +16,10 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     POST /_api/pages/<name>/current     {"version": ...}, by the owner only
     POST /_api/pages/<name>/versions    publish: start (uploads.py); then .../<version>/files for
                                         more of the file list, and .../<version>/commit
+    GET  /_api/pages/<name>/comments    every comment thread (comments.py), signed in
+    POST /_api/pages/<name>/comments    {"anchor", "version", "body"}: a new thread; then
+                                        .../<thread>/reply {"body"}, .../<thread>/resolve
+                                        {"resolved"}, .../<thread>/<comment>/delete (its author)
     GET  /_cli/login?code=              the command line's sign-in: Allow (tokens.py)
     POST /_api/cli/approve              {"code": ...}, from that page
     GET  /_api/cli/token?code=          the command line asks for its token
@@ -61,6 +65,8 @@ from .auth import (
     fixed,
 )
 from .cache import MB, FileCache, PageCache
+from .comments import Comments, listing
+from .comments import view as thread_view
 from .config import DEFAULT_URL
 from .info import DESCRIPTION_CHARS, NAME_CHARS, history, info_html, short
 from .shell import Assets, inject, login_html, shell_csp, shell_html
@@ -84,10 +90,15 @@ API_INFO = re.compile(r"^/_api/pages/([^/]+)/info$")
 API_WRITE = re.compile(
     r"^/_api/pages/([^/]+)/(visibility|current|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
 )
+API_COMMENTS = re.compile(r"^/_api/pages/([^/]+)/comments$")
+COMMENT_WRITE = re.compile(
+    r"^/_api/pages/([^/]+)/comments(?:/([0-9a-f]{16})/(?:(reply|resolve)|([0-9a-f]{16})/delete))?$"
+)
 APPROVE = "/_api/cli/approve"
 SECRET_QUERY = re.compile(r"\b(code)=[^&\s]+")
 EXPIRED = "not signed in, or the sign-in expired: run ontic-pages login"
 SMALL_BODY, LIST_BODY = 4096, 64 * 1024  # Caddy refuses anything over 64 KB anyway
+COMMENT_BODY = 32 * 1024  # 4000 characters of text, as UTF-8 and JSON, and the anchor
 LOGIN_CSP = (
     "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
@@ -161,6 +172,7 @@ class Gateway:
         self.token_secret = check_secret(token_secret) if token_secret else ""
         self.codes = LoginCodes()
         self.uploads = Uploads(store)
+        self.comments = Comments(store, ttl)
 
     def visible(self, email: str):
         """(name, current, visibility, owner, page.json) of each page this viewer may open."""
@@ -416,6 +428,8 @@ def make_handler(gw: Gateway):
                 return self.api_get(m.group(1))
             if m := API_INFO.match(path):
                 return self.api_info(m.group(1))
+            if m := API_COMMENTS.match(path):
+                return self.api_comments(m.group(1))
             if path == "/_api/pages":
                 return self.api_list()
             if path == "/_api/me":
@@ -517,6 +531,26 @@ def make_handler(gw: Gateway):
             ]
             self.send_json(200, {"pages": pages})
 
+        def api_comments(self, name: str):
+            """Every thread of the page, newest activity first, for a signed-in viewer who may
+            open it. Signed out (a public page) there are none; a page's own scripts get none."""
+            if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                return self.send_json(403, {"error": "comments are read by the bar"})
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            current, email = found[0], found[3]
+            if not email:
+                return self.send_json(401, {"error": "sign in to see comments"})
+            try:
+                threads = listing(gw.comments.threads(name), email)
+            except Refused as err:
+                return self.send_json(err.status, {"error": err.message})
+            self.send_json(200, {
+                "name": name, "current": current,
+                "open": sum(1 for t in threads if not t["resolved"]), "threads": threads,
+            })  # fmt: skip
+
         # --- the command line's sign-in (tokens.py) ----------------------------------------
 
         def cli_login(self, query: str):
@@ -561,16 +595,17 @@ def make_handler(gw: Gateway):
             host = (self.headers.get("Host") or "").lower()
             self.on_apex = host == site.apex
             m = API_WRITE.match(path)
+            c = COMMENT_WRITE.match(path)
             big = bool(m and m.group(2).startswith("versions") and m.group(4) != "commit")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = -1
-            if not 0 <= length <= (LIST_BODY if big else SMALL_BODY):
+            if not 0 <= length <= (COMMENT_BODY if c else LIST_BODY if big else SMALL_BODY):
                 self.close_connection = True
                 return self.send_json(413, {"error": "body too large"})
             body = self.rfile.read(length)
-            if not self.on_apex or not (m or path == APPROVE):
+            if not self.on_apex or not (m or c or path == APPROVE):
                 return self.send_json(404 if self.on_apex else 405, {"error": "no writes here"})
             if self.token_refused():
                 return
@@ -591,6 +626,8 @@ def make_handler(gw: Gateway):
             except ValueError:
                 data = None
             try:
+                if c:
+                    return self.comment_write(c, data)
                 if path == APPROVE:
                     return self.approve(data)
                 name = m.group(1)
@@ -652,6 +689,37 @@ def make_handler(gw: Gateway):
             if not isinstance(code, str) or not gw.codes.approve(code, email):
                 return self.send_json(400, {"error": "this sign-in link is used up or too old"})
             self.send_json(200, {"email": email})
+
+        def comment_write(self, c, data):
+            """A new thread, a reply, resolve or reopen, or deleting one's own comment, by
+            anyone signed in who may open the page (comments.py checks the rest)."""
+            name, thread, action, comment = c.groups()
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            current, email = found[0], found[3]
+            if not email:
+                return self.send_json(401, {"error": EXPIRED})
+            if not gw.limit.allow(email.lower()):
+                return self.send_json(429, {"error": "too many changes, wait a minute"})
+            data = data if isinstance(data, dict) else {}
+            status, what = 200, action or ("delete" if comment else "new")
+            if thread is None:
+                version = data.get("version") or current
+                if not isinstance(version, str) or version not in gw.pages.versions(name):
+                    raise Refused(400, f"{name} has no such version")
+                anchor, text = data.get("anchor"), data.get("body")
+                done, status = gw.comments.create(name, version, anchor, email, text), 201
+            elif action == "reply":
+                done = gw.comments.reply(name, thread, email, data.get("body"))
+            elif action == "resolve":
+                if not isinstance(data.get("resolved"), bool):
+                    raise Refused(400, "resolved: true or false")
+                done = gw.comments.resolve(name, thread, data["resolved"], email)
+            else:
+                done = gw.comments.delete(name, thread, comment, email)
+            self.log_message("comment %s %s %s", what, name, done["id"])
+            self.send_json(status, {"thread": thread_view(done, email)})
 
         def may_publish(self, name: str) -> str:
             """The publisher's email: a team member for a new page, the owner for a new version
