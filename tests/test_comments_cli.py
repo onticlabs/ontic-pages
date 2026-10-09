@@ -26,7 +26,8 @@ def threads(store, site):
     v2 = publish(store, site, "report", "second", published_by=OWNER, now=T2)["version"]
     comments = Comments(store, ttl=0)
     a = comments.create("report", v2, ANCHOR, OTHER, "The title is wrong\nand too long")
-    b = comments.create("report", v1, {**ANCHOR, "path": "/docs/", "tag": "h1"}, OTHER, "Old remark")
+    docs = {**ANCHOR, "path": "/docs/", "tag": "h1"}
+    b = comments.create("report", v1, docs, OTHER, "Old remark")
     c = comments.create("report", v2, ANCHOR, OTHER, "Done already")
     comments.resolve("report", c["id"], True, OWNER)
     return comments, a["id"], b["id"], c["id"], v1
