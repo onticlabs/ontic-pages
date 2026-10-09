@@ -78,10 +78,15 @@
     var fromFrame = f && event.source === f.contentWindow;
     var fromPending = pending && event.source === pending.contentWindow;
     if (!fromFrame && !fromPending) return;
+    // A new version's frame that says it is ready becomes the frame, then the features hear it.
+    if (fromPending && msg.ontic === "ready") {
+      promote();
+      fromFrame = true;
+    }
     if (fromFrame) features.forEach(function (f) { if (f.message) f.message(msg); });
     switch (msg.ontic) {
       case "ready":
-        if (fromPending) promote(); else reveal();
+        if (!fromPending) reveal();
         break;
       case "nav":
         if (fromFrame && typeof msg.path === "string" && typeof msg.title === "string") {
@@ -97,7 +102,7 @@
       case "open":
         if (fromFrame && typeof msg.url === "string") openTop(msg.url);
         break;
-      // Later: comment pins and edit mode get their own types here.
+      // Comments (comments.js) and edit text in place (edit.js) handle their own types.
     }
   });
 

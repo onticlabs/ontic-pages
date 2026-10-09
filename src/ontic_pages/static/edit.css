@@ -1,20 +1,19 @@
-/* Edit text in place (edit.js): served as part of bar.css, after it. */
+/* Edit text in place (edit.js): served as part of bar.css, after it. Nothing shows until a text
+   in the page changed: then the counter, Save and Discard. */
 .edit-pop { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; }
-.edit-btn, .edit-cancel, .edit-save, .edit-keep, .edit-discard {
-  height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
+.edit-tools { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.edit-save, .edit-discard, .edit-keep, .edit-really {
+  height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
   background: none; color: var(--text); cursor: pointer; white-space: nowrap;
 }
-.edit-btn:hover, .edit-cancel:hover, .edit-keep:hover { background: var(--hover); }
+.edit-discard:hover, .edit-keep:hover, .edit-really:hover { background: var(--hover); }
 .edit-save, .edit-save:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
-.edit-discard { color: var(--danger); }
-.edit-discard:hover { background: var(--hover); }
-.edit-btn:disabled, .edit-cancel:disabled, .edit-save:disabled { opacity: .6; cursor: default; }
-.edit-tools { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.edit-note {
-  min-width: 0; max-width: 32vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--muted); font-size: 12px;
+.edit-really { color: var(--danger); }
+.edit-save:disabled, .edit-discard:disabled { opacity: .6; cursor: default; }
+.edit-count {
+  font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted);
+  cursor: help;
 }
-.edit-count { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .edit-done { font-size: 13px; color: var(--muted); }
 .edit-panel { width: 300px; }
 .edit-panel .error { padding-top: 0; }
@@ -26,5 +25,5 @@ body.editing .bar { box-shadow: inset 0 -2px 0 var(--accent); }
   .edit-save, .edit-save:hover { color: #111; }
 }
 @media (max-width: 600px) {
-  .edit-btn, .edit-cancel, .edit-save { padding: 0 8px; }
+  .edit-save, .edit-discard { padding: 0 8px; }
 }
