@@ -45,15 +45,25 @@ def icon(name: str, cls: str = "") -> str:
     return f'<svg{extra} viewBox="0 0 24 24" aria-hidden="true">{ICONS[name]}</svg>'
 
 
+# The files served, each made of these static files in order: a feature in a file of its own
+# (edit text in place) comes after the file it extends.
+BUNDLES = {
+    "bar.js": ("bar.js", "edit.js"),
+    "bar.css": ("bar.css", "edit.css"),
+    "bridge.js": ("bridge.js", "edit-bridge.js"),
+    "login.js": ("login.js",),
+}
+
+
 class Assets:
-    """bar.js, bar.css, bridge.js and login.js from the package, each with a hash of its bytes.
-    The apex origin is written into the bridge, which posts only to it."""
+    """bar.js, bar.css, bridge.js and login.js (BUNDLES) from the package, each with a hash of
+    its bytes. The apex origin is written into the bridge, which posts only to it."""
 
     def __init__(self, apex_origin: str):
         self.items: dict[str, tuple[bytes, str]] = {}
         static = files("ontic_pages") / "static"
-        for fname in ("bar.js", "bar.css", "bridge.js", "login.js"):
-            data = (static / fname).read_bytes()
+        for fname, parts in BUNDLES.items():
+            data = b"\n".join((static / part).read_bytes() for part in parts)
             data = data.replace(b"__APEX__", json.dumps(apex_origin).encode())
             self.items[fname] = (data, hashlib.sha256(data).hexdigest()[:16])
 
