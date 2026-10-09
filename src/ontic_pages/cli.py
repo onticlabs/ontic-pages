@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import gateway, remote
+from . import gateway, remote, skills
 from .auth import DEFAULT_AUTH_URL
 from .cache import MB
 from .config import Config, load_config, token_path
@@ -200,6 +200,20 @@ def cmd_whoami(args) -> None:
     print(api.get("/_api/me")["email"])
 
 
+def cmd_skill(args) -> None:
+    if args.print:
+        sys.stdout.write(skills.bundled())
+        return
+    rows = skills.install() if args.install else skills.status()
+    for agent, target, state in rows:
+        print(f"{agent}: {target}\n  {state}")
+    if not args.install:
+        print(
+            "To get ours back over your own copy, delete that file (it comes back on the next "
+            "run) or run ontic-pages skill --install."
+        )
+
+
 def cmd_gateway(args) -> None:
     store, cfg = open_store(args)
     if args.local_as and args.host not in ("127.0.0.1", "localhost", "::1"):
@@ -286,6 +300,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("name")
     s.set_defaults(func=cmd_url)
 
+    s = sub.add_parser(
+        "skill", help="show where the agent skill is installed for Claude Code and Codex"
+    )
+    which = s.add_mutually_exclusive_group()
+    which.add_argument(
+        "--install",
+        action="store_true",
+        help="write ours, also over your own copy (never over a symlink)",
+    )
+    which.add_argument("--print", action="store_true", help="print the bundled skill text")
+    s.set_defaults(func=cmd_skill)
+
     s = sub.add_parser("gateway", help="serve the bucket over HTTP (runs on the server)")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8790)
@@ -338,6 +364,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.command not in ("gateway", "skill"):
+        # Reinstalling the tool runs no code, so the agent skill is refreshed on every run.
+        skills.sync_skill()
     try:
         args.func(args)
     except ValueError as err:

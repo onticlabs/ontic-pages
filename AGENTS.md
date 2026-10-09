@@ -30,6 +30,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   bar.css), the bridge script added to framed HTML, and the command line's login page
   (login.js). Static files are package data, served
   at content-hashed URLs. User text goes into the bar with textContent, never innerHTML.
+- `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
+  (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
+  Edit the skill text there, never in an installed copy.
 - `src/ontic_pages/cli.py`: argparse commands.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
