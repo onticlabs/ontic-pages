@@ -73,6 +73,28 @@ Admins with a bucket key can skip the gateway: `publish`, `list`, `info`, `share
 with your own key. `published_by` is then `ONTIC_PAGES_EMAIL`, else git `user.email`, and the
 owner rules above are not checked. The key goes in the config below.
 
+## Agent skill
+
+`ontic-pages` installs its own skill for Claude Code and Codex, so agents know how to write and
+publish a page. Every command except `gateway` and `skill` copies it to
+`<CLAUDE_CONFIG_DIR or ~/.claude>/skills/ontic-pages/SKILL.md` and
+`<CODEX_HOME or ~/.codex>/skills/ontic-pages/SKILL.md`, but only where that agent folder already
+exists (it is never created). Reinstalling the tool runs no code, so this keeps the skill current
+after an update. It prints one line to stderr on a first install and nothing otherwise.
+
+The installed copy has a marker line (an HTML comment) after the frontmatter. A copy with the
+marker is rewritten whenever it differs from the bundled text; delete the marker line to keep
+your own edits. A copy without it, or a symlinked `SKILL.md`, is left alone.
+`ONTIC_AGENT_SKILLS=0` turns the sync off.
+
+```sh
+ontic-pages skill             # where it is installed and whether it is current
+ontic-pages skill --install   # write ours, also over your own copy (never over a symlink)
+ontic-pages skill --print     # the bundled text
+```
+
+The text lives in `src/ontic_pages/skills/ontic-pages/SKILL.md`.
+
 ## Configure
 
 Set environment variables, or put the same values in `~/.config/ontic-pages/config.toml`
@@ -252,10 +274,3 @@ AWS_ACCESS_KEY_ID=<key id> AWS_SECRET_ACCESS_KEY=<application key> \
 Edit the names in the mapping before `--write` if you want other names. A re-run
 skips versions already copied. `--source-bucket` and `--dest-bucket` default to
 `ontic-r3` and `ontic-pages`; with equal buckets it copies server side instead.
-
-## Still to update elsewhere
-
-The agent skill at `~/.claude/skills/ontic-pages` (a chezmoi-managed dotfile)
-still describes the old `ontic pages publish`. It must be changed to
-`ontic-pages publish --name <name>` in the chezmoi source, and say that a person (or agent)
-signs in once with `ontic-pages login` instead of holding a bucket key.

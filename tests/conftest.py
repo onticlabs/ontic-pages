@@ -11,6 +11,13 @@ from fake_s3 import FakeS3  # noqa: E402
 from ontic_pages.store import Store  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def no_agent_skill(monkeypatch):
+    """Commands run in tests never touch the real ~/.claude or ~/.codex (test_skills.py
+    turns the sync back on against a temporary home)."""
+    monkeypatch.setenv("ONTIC_AGENT_SKILLS", "0")
+
+
 @pytest.fixture
 def s3():
     return FakeS3()
