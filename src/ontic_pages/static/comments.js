@@ -170,8 +170,11 @@
   }
 
   var loading = false, lastLoad = 0;
-  function load() {
-    if (loading || document.visibilityState === "hidden" || Date.now() - lastLoad < 2000) return;
+  // The first load always runs (a page opened in a background tab still gets its count); later
+  // ones only while the tab is visible, at most every 2 seconds.
+  function load(first) {
+    if (loading) return;
+    if (!first && (document.visibilityState === "hidden" || Date.now() - lastLoad < 2000)) return;
     loading = true;
     lastLoad = Date.now();
     api("GET", "").then(function (result) {
@@ -672,10 +675,11 @@
       if (event.key === "Escape") onEscape();
     });
     // Fresh comments every 30 seconds while the tab is visible, and whenever it comes back.
-    setInterval(load, 30000);
-    window.addEventListener("focus", load);
-    document.addEventListener("visibilitychange", load);
+    var later = function () { load(false); };
+    setInterval(later, 30000);
+    window.addEventListener("focus", later);
+    document.addEventListener("visibilitychange", later);
     updateCount();
-    load();
+    load(true);
   });
 })();

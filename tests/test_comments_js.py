@@ -181,7 +181,7 @@ const facts = { page: { name: "report", content_origin: CONTENT, current: V2, vi
                         versions: [] },
                 view: { path: "/", version: null } };
 const document = {
-  body, visibilityState: "visible", activeElement: null,
+  body, visibilityState: "hidden", activeElement: null,  // a background tab still loads once
   getElementById: (id) => id === "ontic-facts" ? { textContent: JSON.stringify(facts) }
     : els[id] || null,
   createElement: (t) => new El(t), createElementNS: (ns, t) => new El(t),
