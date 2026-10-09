@@ -16,10 +16,14 @@ It does not depend on ontic-cli.
 
 ## Install
 
+It comes with the ontic CLI as `ontic pages` (the same command as `ontic-pages`):
+
 ```sh
-uv tool install 'ontic-pages @ git+https://github.com/onticlabs/ontic-pages'
-ontic-pages login     # once a month: sign in with Google in the browser
+uv tool install --force git+https://github.com/onticlabs/cli
+ontic pages login     # once a month: sign in with Google in the browser
 ```
+
+On its own: `uv tool install 'ontic-pages @ git+https://github.com/onticlabs/ontic-pages'`.
 
 Nobody needs a bucket key. The command line talks to the gateway at
 `https://pages.onticlabs.io`, signed in as you; the gateway alone holds the bucket key (write,

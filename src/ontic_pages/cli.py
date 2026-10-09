@@ -235,7 +235,9 @@ def cmd_gateway(args) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="ontic-pages", description=__doc__)
+    # Run as `ontic pages ...` through the ontic CLI, or as `ontic-pages ...` on its own.
+    prog = "ontic pages" if Path(sys.argv[0]).name == "ontic" else "ontic-pages"
+    p = argparse.ArgumentParser(prog=prog, description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
     key = argparse.ArgumentParser(add_help=False)
     key.add_argument(

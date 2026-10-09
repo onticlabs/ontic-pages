@@ -1,32 +1,32 @@
 ---
 name: ontic-pages
-description: Make, publish and share an ontic page (a hosted HTML page for the team). Use whenever the user asks for an ontic page, a page to publish or share with the team, or a report, gallery, dashboard or viewer to host. Pages are published with `ontic-pages publish`, never to claude.ai.
+description: Make, publish and share an ontic page (a hosted HTML page for the team). Use whenever the user asks for an ontic page, a page to publish or share with the team, or a report, gallery, dashboard or viewer to host. Pages are published with `ontic pages publish`, never to claude.ai.
 ---
 
 # Ontic pages
 
 An ontic page is plain HTML served at `https://pages.onticlabs.io/<name>/` under a slim bar
 (title menu with versions and info, Share), behind the team Google sign-in unless it is public.
-The tool is the `ontic-pages` command from the repo onticlabs/ontic-pages. It is independent of
-the ontic CLI's store: no provenance integration, only metadata you pass with `--meta`.
+The tool is `ontic pages` (onticlabs/ontic-pages, installed with the ontic CLI; `ontic-pages` is
+the same command). It is independent of the ontic CLI's store: no provenance integration, only metadata you pass with `--meta`.
 When the user asks for a page, report, gallery or dashboard, make an ontic page, not a claude.ai
 artifact. Never publish to claude.ai unless the user asks for that explicitly.
 
 ## Setup
 
-Do not install or reinstall the tool yourself. If `ontic-pages` is not found, ask the user to
+Do not install or reinstall the tool yourself. If `ontic pages` is not found, ask the user to
 install it:
 
 ```bash
-uv tool install --force 'ontic-cli[pages] @ git+https://github.com/onticlabs/cli'
+uv tool install --force git+https://github.com/onticlabs/cli
 ```
 
 If a command says "not signed in, or the sign-in expired", ask the user to run
-`ontic-pages login` (it opens the browser and needs their click); do not look for keys or tokens
-elsewhere. `ontic-pages whoami` shows who is signed in.
+`ontic pages login` (it opens the browser and needs their click); do not look for keys or tokens
+elsewhere. `ontic pages whoami` shows who is signed in.
 
-This skill is installed by `ontic-pages` itself and refreshed on every run;
-`ontic-pages skill` shows where it is installed and whether it is current.
+This skill is installed by the ontic CLI and refreshed on every `ontic` run;
+`ontic pages skill` shows where it is installed and whether it is current.
 
 ## Write the page like an artifact
 
@@ -60,9 +60,9 @@ Either way, these differ from a claude.ai artifact:
 3. Publish, from the repo the page came from (git remote, branch and commit are recorded):
 
    ```bash
-   ontic-pages publish ./report --name depth-eval --description "Depth eval, Oct 7"
-   ontic-pages publish report.html --name depth-eval            # single file
-   ontic-pages publish ./report --name depth-eval --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic
+   ontic pages publish ./report --name depth-eval --description "Depth eval, Oct 7"
+   ontic pages publish report.html --name depth-eval            # single file
+   ontic pages publish ./report --name depth-eval --meta model=sha256:9f1c... --meta dataset=point-clouds-arctic
    ```
 
    `--meta key=value` (repeatable) records what the page was made from. It is metadata only.
@@ -74,9 +74,9 @@ A new page is `ontic`: anyone signed in with an `@onticlabs.io` Google account c
 Change it only when the user asks:
 
 ```bash
-ontic-pages publish ./report --name depth-eval --visibility private   # only the publisher
-ontic-pages share depth-eval public      # anyone with the link, no sign-in
-ontic-pages share depth-eval ontic       # back to the team
+ontic pages publish ./report --name depth-eval --visibility private   # only the publisher
+ontic pages share depth-eval public      # anyone with the link, no sign-in
+ontic pages share depth-eval ontic       # back to the team
 ```
 
 Visibility belongs to the page, not to a version. The link is the same at every level.
@@ -85,15 +85,15 @@ The owner can also change it from the Share button in the bar.
 ## Versions
 
 ```bash
-ontic-pages list                        # every page you can open, visibility, current version
-ontic-pages list --name depth-eval      # its versions, newest first, * marks the current one
-ontic-pages info depth-eval             # page.json plus the versions (also Page info in the bar)
-ontic-pages set-current depth-eval 20261007T153000Z   # serve an older version again
+ontic pages list                        # every page you can open, visibility, current version
+ontic pages list --name depth-eval      # its versions, newest first, * marks the current one
+ontic pages info depth-eval             # page.json plus the versions (also Page info in the bar)
+ontic pages set-current depth-eval 20261007T153000Z   # serve an older version again
 ```
 
 Nothing is ever deleted. To change a page published earlier, fix the files and publish again
 under the same name; open viewers see the new version without reloading. In a new session, find
-the name with `ontic-pages list`; never guess it from a file name.
+the name with `ontic pages list`; never guess it from a file name.
 
 `--direct` (or `ONTIC_PAGES_DIRECT=1`) talks to the bucket with a key instead of the gateway;
 only for admins who hold one. Do not use it unless the user asks.
