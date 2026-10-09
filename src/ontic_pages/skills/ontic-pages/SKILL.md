@@ -6,7 +6,8 @@ description: Make, publish and share an ontic page (a hosted HTML page for the t
 # Ontic pages
 
 An ontic page is plain HTML served at `https://pages.onticlabs.io/<name>/` under a slim bar
-(title menu with versions and info, Share), behind the team Google sign-in unless it is public.
+(title menu with versions and info, comments, Share), behind the team Google sign-in unless it
+is public.
 The tool is `ontic pages` (onticlabs/ontic-pages, installed with the ontic CLI; `ontic-pages` is
 the same command). It is independent of the ontic CLI's store: no provenance integration, only metadata you pass with `--meta`.
 When the user asks for a page, report, gallery or dashboard, make an ontic page, not a claude.ai
@@ -94,6 +95,29 @@ ontic pages set-current depth-eval 20261007T153000Z   # serve an older version a
 Nothing is ever deleted. To change a page published earlier, fix the files and publish again
 under the same name; open viewers see the new version without reloading. In a new session, find
 the name with `ontic pages list`; never guess it from a file name.
+
+## Comments
+
+Signed-in viewers pin comments to points on a page, reply and resolve them in the bar. They are
+feedback for you. Before publishing a new version of an existing page:
+
+1. Read the open threads: `ontic pages comments <name>` (`--all` adds resolved ones, `--json`
+   gives everything as JSON). Each thread shows a short id, where on the page it points (path
+   and the quoted text) and every comment with its author.
+2. Address each open comment in the page.
+3. Publish the new version.
+4. Reply to every thread you handled, saying what you changed (or why you did not), and resolve
+   the ones you fixed:
+
+   ```bash
+   ontic pages comment depth-eval 3f9a1c "Fixed: the table now uses meters"
+   ontic pages resolve depth-eval 3f9a1c
+   ontic pages resolve depth-eval 3f9a1c --reopen   # if it was resolved by mistake
+   ```
+
+   A thread id may be shortened to its first characters while it stays unique. A long reply can
+   come from stdin: `ontic pages comment <name> <id> - < reply.txt`. Leave threads you did not
+   address open, and tell the user about them.
 
 `--direct` (or `ONTIC_PAGES_DIRECT=1`) talks to the bucket with a key instead of the gateway;
 only for admins who hold one. Do not use it unless the user asks.
