@@ -1,6 +1,6 @@
 # ontic-pages: agent notes
 
-Simple HTML hosting for the team: `ontic-pages login|publish|list|info|share|set-current|url|gateway`.
+Simple HTML hosting for the team: `ontic-pages login|publish|list|info|pull|share|set-current|url|gateway`.
 The commands talk to the gateway with a token from `login`; `--direct` uses a bucket key instead.
 See README.md for what it does and deploy/README.md for how it is hosted.
 

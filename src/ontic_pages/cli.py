@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import gateway, remote, skills
+from . import gateway, pull, remote, skills
 from .auth import DEFAULT_AUTH_URL
 from .cache import MB
 from .config import Config, load_config, token_path
@@ -176,6 +176,27 @@ def cmd_info(args) -> None:
     print(info_text(args.name, current, metas, store.visibility(args.name)))
 
 
+def cmd_pull(args) -> None:
+    check_name(args.name)
+    dest = Path(args.dir or args.name)
+    if args.version and not VERSION_RE.match(args.version):
+        raise SystemExit(f"{args.name} has no version {args.version} (see: list --name)")
+    pull.target(dest)
+    if not direct(args):
+        api, _ = open_api()
+        query = f"?version={args.version}" if args.version else ""
+        answer = api.get(remote.page_path(args.name, "files") + query)
+        count = pull.download(answer["files"], dest)
+        pull.report(args.name, answer["page"], count, dest)
+        return
+    store, _ = open_store(args)
+    version = args.version or store.current(args.name)
+    if not version or version not in store.versions(args.name):
+        raise SystemExit(f"{args.name} has no version {args.version or '(no page)'}")
+    count = pull.pull_direct(store, args.name, version, dest)
+    pull.report(args.name, store.meta(args.name, version), count, dest)
+
+
 def cmd_url(args) -> None:
     print(load_config().page_url(check_name(args.name)))
 
@@ -297,6 +318,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("name")
     s.set_defaults(func=cmd_info)
+
+    s = sub.add_parser(
+        "pull", parents=[key], help="download the current (or a given) version into a folder"
+    )
+    s.add_argument("name")
+    s.add_argument("dir", nargs="?", help="a new or empty folder (default ./<name>)")
+    s.add_argument("--version", help="a version id from `list --name` (default the current one)")
+    s.set_defaults(func=cmd_pull)
 
     s = sub.add_parser("url", help="print a page's URL")
     s.add_argument("name")

@@ -10,6 +10,7 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /public/<name>/<path>          old links: redirects to /<name>/<path>
     GET  /_api/pages/<name>             the page facts this viewer may see, as JSON
     GET  /_api/pages/<name>/info        every version's page.json (signed in)
+    GET  /_api/pages/<name>/files       a version's files with presigned GET URLs (pull.py)
     GET  /_api/pages                    the pages this viewer may open (signed in)
     GET  /_api/me                       who is asking
     POST /_api/pages/<name>/visibility  {"visibility": ...}, by the owner only
@@ -66,6 +67,7 @@ from .cache import MB, FileCache, PageCache
 from .config import DEFAULT_URL
 from .edits import save as save_edits
 from .info import DESCRIPTION_CHARS, NAME_CHARS, history, info_html, short
+from .pull import presigned_files
 from .shell import Assets, inject, login_html, shell_csp, shell_html
 from .store import (
     NAME_RE,
@@ -84,6 +86,7 @@ YEAR = "max-age=31536000, immutable"
 VERSIONED = re.compile(r"^_v/(\d{8}T\d{6}Z)(/.*)?$")
 API_PAGE = re.compile(r"^/_api/pages/([^/]+)$")
 API_INFO = re.compile(r"^/_api/pages/([^/]+)/info$")
+API_FILES = re.compile(r"^/_api/pages/([^/]+)/files$")
 API_WRITE = re.compile(
     r"^/_api/pages/([^/]+)/"
     r"(visibility|current|edits|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
@@ -420,6 +423,8 @@ def make_handler(gw: Gateway):
                 return self.api_get(m.group(1))
             if m := API_INFO.match(path):
                 return self.api_info(m.group(1))
+            if m := API_FILES.match(path):
+                return self.api_files(m.group(1), query)
             if path == "/_api/pages":
                 return self.api_list()
             if path == "/_api/me":
@@ -502,6 +507,20 @@ def make_handler(gw: Gateway):
                 current, metas = history(gw.store, name)
                 self.send_json(200, {
                     "name": name, "current": current, "visibility": found[1], "versions": metas,
+                })  # fmt: skip
+
+        def api_files(self, name: str, query: str):
+            """A version's files (the current one by default) with presigned GET URLs, for
+            `ontic-pages pull`: the bytes come from the bucket, not through here. Signed in."""
+            if found := self.api_page(name, required=True):
+                if not found[3]:
+                    return self.send_json(401, {"error": EXPIRED})
+                version = parse_qs(query).get("version", [found[0]])[0]
+                if not VERSION_RE.match(version) or version not in gw.store.versions(name):
+                    return self.send_json(404, {"error": f"{name} has no version {version}"})
+                self.send_json(200, {
+                    "name": name, "version": version, "page": gw.store.meta(name, version),
+                    "files": presigned_files(gw.store, name, version),
                 })  # fmt: skip
 
         def api_list(self):
