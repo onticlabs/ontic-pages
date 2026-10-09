@@ -7,6 +7,10 @@ to a page's HTML only when that HTML is loaded into the frame; it reports naviga
 and readiness to the shell by postMessage, and hands links to the apex to the shell, which opens
 them in the whole tab (the apex refuses to be framed). Stored files are never changed.
 
+Signed-in viewers also get the comments (static/comments.js and comments.css in the bar,
+static/pins.js served as the second part of the bridge): pins on the page, a thread popover and
+a side panel with every thread.
+
 The command line's sign-in page (login_html, static/login.js) lives here too: it is the other
 HTML page on the apex with a script.
 """
@@ -28,7 +32,9 @@ ACCESS = {
 }
 SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
 SANDBOX += " allow-downloads"
-BAR_RE = re.compile(r"^/_bar/(bar|login)\.([0-9a-f]{1,64})\.(js|css)$")
+BAR_RE = re.compile(r"^/_bar/(bar|login|comments)\.([0-9a-f]{1,64})\.(js|css)$")
+# The bridge is served as one script: bridge.js, then the comment pins (pins.js).
+BRIDGE_PARTS = ("bridge.js", "pins.js")
 BRIDGE_RE = re.compile(r"^/_bridge\.([0-9a-f]{1,64})\.js$")
 
 ICONS = {
@@ -37,6 +43,7 @@ ICONS = {
     "private": '<rect x="5.5" y="11" width="13" height="9" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/>',  # noqa: E501
     "ontic": '<circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M15.5 6.2a3 3 0 0 1 0 5.6"/><path d="M17 14.3a5.5 5.5 0 0 1 3.5 4.7"/>',  # noqa: E501
     "public": '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/>',  # noqa: E501
+    "comment": '<path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',  # noqa: E501
 }
 
 
@@ -46,14 +53,16 @@ def icon(name: str, cls: str = "") -> str:
 
 
 class Assets:
-    """bar.js, bar.css, bridge.js and login.js from the package, each with a hash of its bytes.
-    The apex origin is written into the bridge, which posts only to it."""
+    """bar.js, bar.css, comments.js, comments.css, the bridge (BRIDGE_PARTS) and login.js from
+    the package, each with a hash of its bytes. The apex origin is written into the bridge, which
+    posts only to it."""
 
     def __init__(self, apex_origin: str):
         self.items: dict[str, tuple[bytes, str]] = {}
         static = files("ontic_pages") / "static"
-        for fname in ("bar.js", "bar.css", "bridge.js", "login.js"):
-            data = (static / fname).read_bytes()
+        for fname in ("bar.js", "bar.css", "comments.js", "comments.css", "bridge.js", "login.js"):
+            parts = BRIDGE_PARTS if fname == "bridge.js" else (fname,)
+            data = b"\n".join((static / part).read_bytes() for part in parts)
             data = data.replace(b"__APEX__", json.dumps(apex_origin).encode())
             self.items[fname] = (data, hashlib.sha256(data).hexdigest()[:16])
 
@@ -141,6 +150,26 @@ def versions_html(page: dict, viewing: str | None) -> str:
     return "".join(items)
 
 
+def comments_html() -> str:
+    """The comment toggle (with the count of open threads) and its menu: for signed-in viewers
+    only, wired by static/comments.js."""
+    return (
+        '<div class="pop cm" id="cm">'
+        '<button class="icon-btn cm-toggle" id="cm-btn" type="button" aria-pressed="false" '
+        f'aria-label="Comment" title="Comment">{icon("comment")}'
+        '<span class="cm-count" id="cm-count" hidden></span></button>'
+        '<button class="icon-btn cm-more" id="cm-more" type="button" aria-haspopup="menu" '
+        'aria-expanded="false" aria-controls="cm-menu" aria-label="Comment options">'
+        f"{icon('chevron', 'chev')}</button>"
+        '<div class="menu" id="cm-menu" role="menu" hidden>'
+        '<button class="item" type="button" role="menuitem" id="cm-all">Show all comments'
+        "</button>"
+        '<button class="item" type="button" role="menuitemcheckbox" aria-checked="false" '
+        'id="cm-resolved">Show resolved<span class="cm-switch" aria-hidden="true"></span></button>'
+        "</div></div>\n"
+    )
+
+
 def shell_html(page: dict, view: dict, assets: Assets) -> str:
     """page: the facts from the API. view: version (None for current), path (in the frame),
     src (the frame's URL), raw (the same without the bar), signin (a URL, or "")."""
@@ -149,9 +178,15 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
     shown = next((v for v in page["versions"] if v["version"] == (viewing or page["current"])), {})
     by = page.get("published_by", "")
     viewer = page.get("viewer", "")
+    comments_head = comments = ""
     if viewer:
         initial = e(viewer[:1].upper())
         who = f'<span class="avatar" title="Signed in as {e(viewer)}">{initial}</span>'
+        comments_head = (
+            f'<link rel="stylesheet" href="{assets.url("comments.css")}">\n'
+            f'<script src="{assets.url("comments.js")}"></script>\n'
+        )
+        comments = comments_html()
     else:
         who = f'<a class="signin" id="signin" href="{e(view["signin"])}">Sign in</a>'
     owner_can = page.get("role") == "owner"
@@ -172,7 +207,7 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 <noscript><style>.frame {{ opacity: 1 }}</style></noscript>
 <script id="ontic-facts" type="application/json">{json_for_html({"page": page, "view": view})}</script>
 <script src="{assets.url("bar.js")}"></script>
-</head>
+{comments_head}</head>
 <body data-visibility="{e(page["visibility"])}">
 <header class="bar">
 <a class="icon-btn" href="/" title="All pages" aria-label="All pages">{icon("home")}</a>
@@ -195,7 +230,7 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 </div>
 <a class="old" id="old" href="/{e(name)}/"{"" if old else " hidden"} title="You are looking at an older version. Open the current one.">Old version<span class="wide"> &middot; view current</span></a>
 <span class="grow"></span>
-{who}
+{comments}{who}
 <div class="pop" id="share-pop">
 <button class="share" id="share-btn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="share-panel">{icon("private", "vis vis-private")}{icon("ontic", "vis vis-ontic")}{icon("public", "vis vis-public")}<span class="wide">Share</span></button>
 <div class="panel" id="share-panel" role="dialog" aria-label="Share {e(name)}" hidden>

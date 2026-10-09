@@ -1,10 +1,11 @@
 """The comments API on the gateway: who may read and write, the write checks, the limits."""
 
 import json
+import re
 from datetime import UTC, datetime
 
 import pytest
-from helpers import ORIGIN, SECRET, TEAM, request
+from helpers import APEX, FRAME, ORIGIN, SECRET, TEAM, request
 
 from ontic_pages.comments import BODY_LIMIT
 from ontic_pages.publish import publish
@@ -17,7 +18,7 @@ OTHER = "other.person@onticlabs.io"
 OUTSIDER = "someone@gmail.com"
 ANCHOR = {"path": "/", "selector": "p", "fx": 0.25, "fy": 0.5, "snippet": "x", "x": 1, "y": 2}
 BAR = {"Content-Type": "application/json", "Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}
-WIDE = "漢"  # three bytes in UTF-8
+WIDE = chr(0x6F22)  # three bytes in UTF-8
 
 
 @pytest.fixture
@@ -152,3 +153,23 @@ def test_api_with_a_token(local, store, report):
     status, _, _ = request(srv, "/_api/pages/report/comments", host=host, who=None,
                            headers={**token, "Origin": srv.url})  # fmt: skip
     assert status == 403
+
+
+def test_shell_has_comments_when_signed_in(serve, store, report):
+    srv = serve()
+    body = request(srv, "/report/")[2].decode()
+    assert 'id="cm-btn"' in body and 'id="cm-menu"' in body and "Show resolved" in body
+    for url in re.findall(r'"(/_bar/comments\.[0-9a-f]+\.(?:js|css))"', body):
+        status, headers, data = request(srv, url, who=None)
+        assert status == 200 and data
+        assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert len(re.findall(r"/_bar/comments\.", body)) == 2
+    # The pins come with the bridge, in the same script.
+    framed = request(srv, "/", host=f"report.{APEX}", headers=FRAME)[2]
+    bridge = re.search(rb'src="(/_bridge\.[0-9a-f]+\.js)"', framed).group(1).decode()
+    script = request(srv, bridge, host=f"report.{APEX}")[2]
+    assert b'"comment-at"' in script and script.count(f'"{ORIGIN}"'.encode()) == 2
+    # Signed out on a public page: no comments at all.
+    store.set_visibility("report", "public")
+    body = request(srv, "/report/", who=None)[2].decode()
+    assert "cm-btn" not in body and "/_bar/comments." not in body

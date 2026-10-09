@@ -334,7 +334,8 @@
       var f = frame();
       f.src = origin + path;
     });
-    if (location.hash && path.indexOf("#") < 0) {
+    // #comment=<id> is for the bar (comments.js), not the page.
+    if (location.hash && path.indexOf("#") < 0 && location.hash.indexOf("#comment=") !== 0) {
       path += location.hash;
       frame().src = origin + path;
     }
