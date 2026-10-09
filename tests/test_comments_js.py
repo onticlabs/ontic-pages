@@ -79,19 +79,28 @@ const body = documentElement.appendChild(new El("body"));
 PINS = """
 const posted = [];
 const parent = { postMessage: (m, o) => posted.push([JSON.parse(JSON.stringify(m)), o]) };
-const window = { parent, top: parent, scrollX: 0, scrollY: 100, innerHeight: 800,
+const scrolled = [];
+const window = { parent, top: parent, scrollX: 0, scrollY: 100, innerWidth: 1000,
+  innerHeight: 800,
   addEventListener: (t, f) => (winListeners[t] = winListeners[t] || []).push(f),
-  requestAnimationFrame: (f) => f(), scrollTo() {} };
+  requestAnimationFrame: (f) => f(), scrollTo() {},
+  getComputedStyle: (e) => ({ borderTopLeftRadius: e.radius || "0px" }) };
 const main = body.appendChild(new El("div")); main.id = "main";
+main.rect = { left: 0, top: 0, right: 1000, bottom: 2000, width: 1000, height: 2000 };
 const p1 = main.appendChild(new El("p")); p1.textContent = "First";
 const p2 = main.appendChild(new El("p")); p2.textContent = "  Depth   error table ";
 p2.rect = { left: 100, top: 200, right: 300, bottom: 240, width: 200, height: 40 };
+p2.radius = "8px";
+p2.scrollIntoView = (o) => scrolled.push(o.block);
+const bold = new El("b"); bold.textContent = "bold";
+bold.rect = { left: 20, top: 50, right: 44, bottom: 64, width: 24, height: 14 };
 const byId = { "#main": [main] };
 const selectors = { "#main > p:nth-of-type(2)": p2, "#main > p:nth-of-type(1)": p1 };
+let hit = p2;
 const document = { readyState: "complete", title: "t", documentElement, body,
   querySelector: (s) => s === "title" ? null : selectors[s] || null,
   querySelectorAll: (s) => byId[s] || [],
-  createElement: (t) => new El(t), elementFromPoint: () => p2,
+  createElement: (t) => new El(t), elementFromPoint: () => hit,
   addEventListener: (t, f) => (docListeners[t] = docListeners[t] || []).push(f) };
 const location = new URL(CONTENT + "/_v/" + V1 + "/docs/?a=1");
 vm.runInNewContext(SOURCE, { window, document, location, history: {}, URL, setTimeout });
@@ -107,23 +116,73 @@ out.foreign = [message({ ontic: "comment-mode", on: true }, "https://evil.test")
 out.untouched = documentElement.children.length;  // nothing drawn before the bar asks
 message({ ontic: "comment-mode", on: true });
 const host = documentElement.children[1];
-const capture = host.shadow.children[0];
+const part = (name) => host.shadow.children.filter((c) => c.attrs["data-part"] === name)[0];
+const capture = part("capture");
+function box(name) {
+  const b = part(name);
+  return b.style.display === "block" ? [b.style.left, b.style.top, b.style.width, b.style.height,
+                                        b.style["border-radius"]] : null;
+}
+// Hover in comment mode: the element under the pointer, with a label naming it.
+function hover(target) {
+  hit = target;
+  capture.fire("pointermove", { clientX: 150, clientY: 230 });
+  return [box("hover"), part("label").style.display === "block" ? part("label").textContent
+                                                                 : null];
+}
+out.hover = {
+  p: hover(p2), body: hover(body), html: hover(documentElement), host: hover(host),
+  huge: hover(main), tiny: hover(bold),
+};
+capture.fire("pointerleave");
+out.left = box("hover");
+hit = p2;
 posted.length = 0;
 capture.fire("click", { clientX: 150, clientY: 230 });
 out.at = posted.slice();
-out.pins = message({ ontic: "pins", seq: 7, pins: [
-  { id: "a".repeat(16), initial: "O", color: "#2563eb", resolved: false, fallback: false,
-    anchor: { selector: "#main > p:nth-of-type(2)", snippet: "Depth error table",
-              fx: 0.5, fy: 0 } },
+hit = main;  // too big to outline, still takes the comment
+posted.length = 0;
+capture.fire("click", { clientX: 150, clientY: 230 });
+out.atHuge = posted[0][0].anchor.selector;
+hit = body;
+posted.length = 0;
+capture.fire("click", { clientX: 150, clientY: 230 });
+out.atBody = posted[0][0].anchor.selector;
+message({ ontic: "comment-mode", on: false });
+// An anchor made before tags were kept (no tag) places as before.
+const A = { id: "a".repeat(16), initial: "O", color: "#2563eb", resolved: false, fallback: false,
+  anchor: { selector: "#main > p:nth-of-type(2)", snippet: "Depth error table",
+            fx: 0.5, fy: 0 } };
+out.pins = message({ ontic: "pins", seq: 7, pins: [A,
   { id: "b".repeat(16), initial: "O", color: "red", fallback: false,
     anchor: { selector: "#main > p:nth-of-type(1)", snippet: "changed since", x: 5, y: 5 } },
   { id: "c".repeat(16), initial: "O", fallback: true,
     anchor: { selector: "#gone", snippet: "", x: 40, y: 150 } },
 ]});
-const layer = host.shadow.children[1];
+const layer = part("pins");
 out.placed = layer.children.map((n) => [n.style.display, n.style.left, n.style.top,
                                         n.style.background]);
+out.noneSelected = box("selected");
+// The bar asks to outline a pin's element (its card hovered), then to stop.
+out.highlight = [message({ ontic: "highlight", id: "a".repeat(16) }), box("hover"),
+                 part("label").style.display];
+message({ ontic: "highlight", id: null });
+out.unhighlight = box("hover");
+message({ ontic: "highlight", id: "f".repeat(16) });
+out.unknown = box("hover");
+// The pointer on a pin outlines its element.
+layer.children[0].fire("pointerenter");
+out.pinHover = box("hover");
+layer.children[0].fire("pointerleave");
+out.pinLeave = box("hover");
+// The open thread (the active pin) keeps its element outlined, following it as it moves.
+message({ ontic: "pins", seq: 8, pins: [Object.assign({}, A, { active: true })] });
+out.selected = box("selected");
+p2.rect = { left: 100, top: 500, right: 300, bottom: 540, width: 200, height: 40 };
+winListeners.scroll.forEach((f) => f());
+out.moved = [box("selected"), layer.children[0].style.top];
 out.focus = message({ ontic: "pin-focus", id: "a".repeat(16) });
+out.scrolled = scrolled;
 posted.length = 0;
 winListeners.keydown.forEach((f) => f({ key: "Escape" }));
 out.escape = posted.slice();
@@ -141,8 +200,12 @@ def run(script: str, source: str, extra: dict | None = None):
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
+def pins_out() -> dict:
+    return run(PINS, Assets(APEX).items["bridge.js"][0].decode())
+
+
 def test_pins_in_the_page():
-    out = run(PINS, Assets(APEX).items["bridge.js"][0].decode())
+    out = pins_out()
     assert out["foreign"] == [[], []] and out["untouched"] == 1
     [[at, to]] = out["at"]
     assert to == APEX and at["ontic"] == "comment-at"
@@ -150,13 +213,17 @@ def test_pins_in_the_page():
     assert at["anchor"] == {
         "path": "/docs/?a=1",  # without /_v/<version>
         "selector": "#main > p:nth-of-type(2)",
+        "tag": "p",
         "fx": 0.25,
         "fy": 0.75,
         "snippet": "Depth error table",
         "x": 150,
         "y": 330,
     }
-    # Placed by selector; the changed text with no fallback is an orphan; the fallback at x, y.
+    # A wrapper too big to outline still takes a click; the document is the last resort.
+    assert out["atHuge"] == "#main" and out["atBody"] == "body:nth-of-type(1)"
+    # Placed by selector (an anchor without a tag, as older threads have); the changed text
+    # with no fallback is an orphan; the fallback at x, y.
     assert out["pins"] == [[{"ontic": "orphans", "ids": ["b" * 16], "seq": 7}, APEX]]
     assert out["placed"] == [
         ["block", "200px", "176px", "#2563eb"],
@@ -164,7 +231,33 @@ def test_pins_in_the_page():
         ["block", "40px", "26px", "#d97706"],
     ]
     assert out["focus"][-1][0]["ontic"] == "pin-open" and out["focus"][-1][0]["id"] == "a" * 16
+    assert out["scrolled"] == ["center"]  # opened from the list: its element comes into view
     assert out["escape"] == [[{"ontic": "comment-escape"}, APEX]]
+
+
+P2_BOX = ["97px", "197px", "206px", "46px", "11px"]  # just outside p2, its radius plus 3
+
+
+def test_hover_outlines_the_element_under_the_pointer():
+    hover = pins_out()["hover"]
+    assert hover["p"] == [P2_BOX, "p  Depth error table"]
+    # Never the document, our own overlay, or a wrapper covering most of the viewport.
+    assert hover["body"] == hover["html"] == hover["host"] == hover["huge"] == [None, None]
+    # A small inline element inside a text block is a target of its own.
+    assert hover["tiny"] == [["17px", "47px", "30px", "20px", "3px"], "b  bold"]
+
+
+def test_open_threads_and_highlights_outline_their_element():
+    out = pins_out()
+    assert out["left"] is None  # the pointer left the page
+    assert out["noneSelected"] is None  # no thread open
+    posts, hovered, label = out["highlight"]
+    assert posts == [] and hovered == P2_BOX and label == "none"  # no label outside comment mode
+    assert out["unhighlight"] is None and out["unknown"] is None
+    assert out["pinHover"] == P2_BOX and out["pinLeave"] is None
+    assert out["selected"] == P2_BOX
+    # The page moved the element: the outline and the pin follow it.
+    assert out["moved"] == [["97px", "497px", "206px", "46px", "11px"], "476px"]
 
 
 BAR = """
@@ -237,6 +330,17 @@ setImmediate(() => setImmediate(() => {
   message({ ontic: "engaged" });
   message({ ontic: "comment-at", anchor: { path: "/" }, point: { x: 1, y: 1 } });
   out.composeOn = pop.textContent.indexOf("New comment") >= 0;
+  // The side panel: each card names its element; the pointer on it outlines the element.
+  els["cm-all"].fire("click");
+  const cardNode = side.all().filter((c) => c.className === "cm-card")[0];
+  out.card = cardNode.children.filter((c) => c.className === "cm-quote")[0].children
+    .map((c) => [c.className, c.textContent]);
+  sent.length = 0;
+  cardNode.fire("mouseenter");
+  out.cardOn = sent.slice();
+  sent.length = 0;
+  cardNode.fire("mouseleave");
+  out.cardOff = sent.slice();
   console.log(JSON.stringify(out));
 }));
 """
@@ -282,7 +386,11 @@ def test_bar_comments():
     assert out["foreign"] == [[], []] and out["popHidden"] is True
     # A pin click opens the thread; its text is set as text, never parsed as HTML.
     assert out["popShown"] and "<b>secret</b> words" in out["popText"]
-    assert "Depth table" in out["popText"] and out["active"] == ["a" * 16]
+    assert "Depth table" in out["popText"] and out["active"] == ["a" * 16]  # outlined
+    # An older anchor has no tag: it is read from the end of its selector.
+    assert out["card"] == [["cm-tag", "p"], ["cm-snippet", "Depth table"]]
+    assert out["cardOn"] == [[{"ontic": "highlight", "id": "a" * 16}, CONTENT]]
+    assert out["cardOff"] == [[{"ontic": "highlight", "id": None}, CONTENT]]
     assert out["composeOff"] is False and out["mode"] == [True] and out["composeOn"] is True
     assert out["focus"] == [] and out["panel"] is None
 

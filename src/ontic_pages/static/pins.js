@@ -1,15 +1,17 @@
 // Comment pins inside a page: the second part of the bridge (the gateway serves bridge.js and
-// this file as one script, added to a page's HTML only in the bar's frame). In comment mode a
-// click on the page becomes an anchor (where on the page it points) that goes to the bar. The
-// pins the bar sends are drawn over the page and kept in place while it scrolls and resizes;
-// pins that cannot be placed are reported back. It never sees comment text or anyone's email: a
-// pin is an id, an initial, a color, its anchor and two flags. Nothing is drawn until the bar
-// sends pins or turns comment mode on; then everything lives in one element at the end of the
-// document, in a closed shadow root at the highest z-index, so the page's styles neither reach
-// the pins nor are touched by them. Styles are set through the DOM, which a page's own policy
-// does not block.
+// this file as one script, added to a page's HTML only in the bar's frame). Comments attach to
+// elements: in comment mode the element under the pointer is outlined (with a small label naming
+// it), and a click on it becomes an anchor (which element, the point within it) that goes to the
+// bar. The pins the bar sends are drawn over the page and follow their elements while it
+// scrolls, resizes or changes; pins that cannot be placed are reported back. The element of the
+// open thread (the active pin) is outlined too, and so is a pin's element while the pointer is
+// on the pin or on its card in the bar. It never sees comment text or anyone's email: a pin is
+// an id, an initial, a color, its anchor and two flags. Nothing is drawn until the bar sends pins
+// or turns comment mode on; then everything lives in one element at the end of the document, in
+// a closed shadow root at the highest z-index, so the page's styles neither reach the pins nor
+// are touched by them. Styles are set through the DOM, which a page's own policy does not block.
 //
-// From the bar: comment-mode {on}, pins {pins, seq}, pin-focus {id}.
+// From the bar: comment-mode {on}, pins {pins, seq}, pin-focus {id}, highlight {id or null}.
 // To the bar: comment-at {anchor, point}, pin-open {id, point}, orphans {ids, seq},
 // comment-escape. Like the bridge, it posts to the apex only and listens only to the apex parent.
 (function () {
@@ -19,16 +21,23 @@
 
   var MAX_DEPTH = 8;
   var SNIPPET = 60;
+  var LABEL = 32;
   var MAX_PINS = 500;
+  var HUGE = 0.8; // an element over this share of the viewport is a wrapper, not a target
+  var ACCENT = "#2f5bd3";
   var VERSION = /^\/_v\/\d{8}T\d{6}Z(?=\/)/;
   var COLOR = /^#[0-9a-fA-F]{6}$/;
   var mode = false;
   var pins = []; // [{id, initial, color, anchor, resolved, fallback, active}]
   var nodes = {}; // id -> pin element
   var host = null, layer = null, capture = null;
+  var boxes = {}; // selected, hover: outline boxes; label: the hover box's name
+  var pointer = null; // {x, y}: where the pointer is in comment mode
+  var hoverId = null; // a pin whose element is outlined (the pointer on the pin, or its card)
+  var selected = null; // the element of the active pin, from the last place()
   var lastOrphans = null;
   var seq = 0; // the bar's number for the pins message being answered
-  var scheduled = false;
+  var scheduled = false, boxesScheduled = false;
 
   function send(message) {
     try {
@@ -41,6 +50,12 @@
     return node;
   }
 
+  function part(name, styles) {
+    var node = css(document.createElement("div"), styles);
+    node.setAttribute("data-part", name);
+    return node;
+  }
+
   function overlay() {
     if (host && host.isConnected) return;
     host = css(document.createElement("ontic-comments"), {
@@ -48,16 +63,32 @@
       overflow: "hidden", "pointer-events": "none", "z-index": "2147483647"
     });
     var root = host.attachShadow ? host.attachShadow({ mode: "closed" }) : host;
-    capture = css(document.createElement("div"), {
+    capture = part("capture", {
       position: "absolute", left: "0", top: "0", width: "100%", height: "100%",
-      cursor: "crosshair", "pointer-events": "auto", display: mode ? "block" : "none"
+      cursor: "pointer", "pointer-events": "auto", display: mode ? "block" : "none"
     });
     capture.addEventListener("click", onCapture);
-    layer = css(document.createElement("div"), {
+    capture.addEventListener("pointermove", onMove);
+    capture.addEventListener("pointerleave", function () { pointer = null; scheduleBoxes(); });
+    var outline = {
+      position: "absolute", display: "none", "box-sizing": "border-box",
+      "pointer-events": "none", border: "2px solid " + ACCENT
+    };
+    boxes.selected = part("selected", outline);
+    boxes.selected.style.setProperty("background", "rgba(47, 91, 211, .08)");
+    boxes.hover = part("hover", outline);
+    boxes.label = part("label", {
+      position: "absolute", display: "none", "pointer-events": "none", "max-width": "280px",
+      padding: "1px 6px", "border-radius": "4px", background: ACCENT, color: "#fff",
+      font: "500 11px/16px system-ui,-apple-system,'Segoe UI',Roboto,sans-serif",
+      "white-space": "nowrap", overflow: "hidden", "text-overflow": "ellipsis"
+    });
+    layer = part("pins", {
       position: "absolute", left: "0", top: "0", width: "100%", height: "100%"
     });
-    root.appendChild(capture);
-    root.appendChild(layer);
+    [capture, boxes.selected, boxes.hover, boxes.label, layer].forEach(function (node) {
+      root.appendChild(node);
+    });
     nodes = {};
     document.documentElement.appendChild(host);
   }
@@ -68,6 +99,17 @@
     var text = element.textContent || (element.getAttribute && (element.getAttribute("alt")
       || element.getAttribute("aria-label"))) || "";
     return text.slice(0, 2000).replace(/\s+/g, " ").trim().slice(0, SNIPPET);
+  }
+
+  function tagOf(element) {
+    return String(element.localName || element.tagName || "").toLowerCase();
+  }
+
+  // What the label says: the tag name and the start of the element's text.
+  function describe(element) {
+    var text = snippetOf(element);
+    if (text.length > LABEL) text = text.slice(0, LABEL - 1) + "…";
+    return tagOf(element) + (text ? "  " + text : "");
   }
 
   function escapeId(id) {
@@ -103,28 +145,62 @@
 
   function anchorFor(element, x, y) {
     var box = element.getBoundingClientRect();
-    function part(offset, size) { return size > 0 ? Math.min(1, Math.max(0, offset / size)) : 0.5; }
+    function share(offset, size) { return size > 0 ? Math.min(1, Math.max(0, offset / size)) : 0.5; }
     return {
       path: pagePath(),
       selector: selectorFor(element),
-      fx: part(x - box.left, box.width),
-      fy: part(y - box.top, box.height),
+      tag: tagOf(element),
+      fx: share(x - box.left, box.width),
+      fy: share(y - box.top, box.height),
       snippet: snippetOf(element),
       x: Math.max(0, x + window.scrollX),
       y: Math.max(0, y + window.scrollY)
     };
   }
 
+  // The page's element at a point, under the capture layer.
+  function hitAt(x, y) {
+    if (!document.elementFromPoint) return null;
+    if (capture) capture.style.setProperty("pointer-events", "none");
+    var element = document.elementFromPoint(x, y);
+    if (capture) capture.style.setProperty("pointer-events", "auto");
+    return element;
+  }
+
+  function page(element) {
+    return element && element.nodeType === 1 && element !== host
+      && element !== document.documentElement && element !== document.body;
+  }
+
+  // The element a comment at this point attaches to: the one under the pointer, however small,
+  // but not the document itself, our overlay, or a wrapper covering most of the viewport (there
+  // is no way down from it to what the pointer means).
+  function targetAt(x, y) {
+    var element = hitAt(x, y);
+    if (!page(element)) return null;
+    var box = element.getBoundingClientRect();
+    var width = window.innerWidth || 0, height = window.innerHeight || 0;
+    var seenW = Math.max(0, Math.min(box.right, width) - Math.max(box.left, 0));
+    var seenH = Math.max(0, Math.min(box.bottom, height) - Math.max(box.top, 0));
+    if (width > 0 && height > 0 && seenW * seenH > HUGE * width * height) return null;
+    return element;
+  }
+
+  function onMove(event) {
+    pointer = { x: event.clientX, y: event.clientY };
+    scheduleBoxes();
+  }
+
   function onCapture(event) {
     event.preventDefault();
     event.stopPropagation();
-    capture.style.display = "none";
-    var target = document.elementFromPoint(event.clientX, event.clientY);
-    capture.style.display = mode ? "block" : "none";
-    if (!target || target === host || target === document.documentElement) target = document.body;
+    var x = event.clientX, y = event.clientY;
+    // A wrapper too big to outline still takes the comment, at the point clicked.
+    var target = targetAt(x, y) || hitAt(x, y);
+    if (!page(target)) target = document.body;
     if (!target) return;
-    send({ ontic: "comment-at", anchor: anchorFor(target, event.clientX, event.clientY),
-           point: { x: event.clientX, y: event.clientY } });
+    pointer = null;
+    send({ ontic: "comment-at", anchor: anchorFor(target, x, y), point: { x: x, y: y } });
   }
 
   // Where an anchor is now, in viewport coordinates, or null: on the element its selector names
@@ -151,6 +227,65 @@
     return { x: anchor.x - window.scrollX, y: anchor.y - window.scrollY, element: null };
   }
 
+  function pinById(id) {
+    return pins.filter(function (p) { return p.id === id; })[0] || null;
+  }
+
+  // ---- outlines ------------------------------------------------------------------------------
+
+  // The element's corner radius, a little larger since the box sits just outside it.
+  function radius(element) {
+    var value = "";
+    try { value = window.getComputedStyle(element).borderTopLeftRadius || ""; } catch (error) { /* none */ }
+    var px = /^(\d+(?:\.\d+)?)px$/.exec(value);
+    return px ? (parseFloat(px[1]) + 3) + "px" : "3px";
+  }
+
+  function outline(box, element) {
+    if (!element || element.isConnected === false) {
+      box.style.setProperty("display", "none");
+      return null;
+    }
+    var r = element.getBoundingClientRect();
+    if (!(r.width > 0 || r.height > 0)) {
+      box.style.setProperty("display", "none");
+      return null;
+    }
+    css(box, {
+      display: "block", left: Math.round(r.left - 3) + "px", top: Math.round(r.top - 3) + "px",
+      width: Math.round(r.width + 6) + "px", height: Math.round(r.height + 6) + "px",
+      "border-radius": radius(element)
+    });
+    return r;
+  }
+
+  function drawBoxes() {
+    boxesScheduled = false;
+    if (!host) return;
+    var hovered = null;
+    if (mode && pointer) hovered = targetAt(pointer.x, pointer.y);
+    else if (hoverId) {
+      var pin = pinById(hoverId);
+      var point = pin && locate(pin.anchor, pin.fallback);
+      hovered = point && point.element;
+    }
+    outline(boxes.selected, selected);
+    var r = outline(boxes.hover, hovered === selected ? null : hovered);
+    var label = boxes.label;
+    if (!r || !mode) { label.style.setProperty("display", "none"); return; }
+    label.textContent = describe(hovered);
+    css(label, {
+      display: "block", left: Math.round(Math.max(0, r.left - 3)) + "px",
+      top: Math.round(r.top - 23 >= 0 ? r.top - 23 : r.bottom + 5) + "px"
+    });
+  }
+
+  function scheduleBoxes() {
+    if (boxesScheduled) return;
+    boxesScheduled = true;
+    (window.requestAnimationFrame || setTimeout)(drawBoxes);
+  }
+
   // ---- pins ----------------------------------------------------------------------------------
 
   function pinNode(pin) {
@@ -172,6 +307,15 @@
         var box = node.getBoundingClientRect();
         send({ ontic: "pin-open", id: pin.id, point: { x: box.right, y: box.top } });
       });
+      node.addEventListener("pointerenter", function () {
+        pointer = null;
+        hoverId = pin.id;
+        scheduleBoxes();
+      });
+      node.addEventListener("pointerleave", function () {
+        if (hoverId === pin.id) hoverId = null;
+        scheduleBoxes();
+      });
       layer.appendChild(node);
       nodes[pin.id] = node;
     }
@@ -192,7 +336,12 @@
 
   function place() {
     scheduled = false;
-    if (!pins.length) { reportOrphans([]); return; }
+    selected = null;
+    if (!pins.length) {
+      reportOrphans([]);
+      drawBoxes();
+      return;
+    }
     overlay();
     var orphans = [];
     pins.forEach(function (pin) {
@@ -203,24 +352,30 @@
         if (pin.id !== "draft") orphans.push(pin.id);
         return;
       }
+      if (pin.active && page(point.element)) selected = point.element;
       node.style.display = "block";
       node.style.left = Math.round(point.x) + "px";
       node.style.top = Math.round(point.y - 24) + "px";
     });
     reportOrphans(orphans);
+    drawBoxes();
   }
 
+  function busy() { return pins.length || mode || hoverId; }
+
   function schedule() {
-    if (scheduled) return;
+    if (scheduled || !busy()) return;
     scheduled = true;
     (window.requestAnimationFrame || setTimeout)(place);
   }
 
   function setMode(on) {
     mode = on;
+    pointer = null;
     if (!on && !host) return;
     overlay();
     capture.style.display = mode ? "block" : "none";
+    drawBoxes();
   }
 
   function setPins(list) {
@@ -238,12 +393,15 @@
     Object.keys(nodes).forEach(function (id) {
       if (!kept[id]) { nodes[id].remove(); delete nodes[id]; }
     });
+    if (hoverId && !kept[hoverId]) hoverId = null;
     lastOrphans = null; // the bar waits for one answer to each pins message
     place();
   }
 
+  // Open a thread from the bar's list or a link: its element comes into view (outlined, as the
+  // active pin once the bar has opened it), and the bar hears where the pin is.
   function focusPin(id) {
-    var pin = pins.filter(function (p) { return p.id === id; })[0];
+    var pin = pinById(id);
     if (!pin) return;
     var point = locate(pin.anchor, pin.fallback);
     if (!point) { lastOrphans = null; place(); return; }
@@ -259,6 +417,12 @@
     send({ ontic: "pin-open", id: id, point: { x: box.right, y: box.top } });
   }
 
+  function highlight(id) {
+    hoverId = typeof id === "string" && pinById(id) ? id : null;
+    if (hoverId) overlay();
+    if (host) drawBoxes();
+  }
+
   window.addEventListener("message", function (event) {
     if (event.origin !== APEX || event.source !== window.parent) return;
     var message = event.data;
@@ -268,23 +432,36 @@
       seq = typeof message.seq === "number" ? message.seq : 0;
       setPins(message.pins);
     } else if (message.ontic === "pin-focus" && typeof message.id === "string") focusPin(message.id);
+    else if (message.ontic === "highlight") highlight(message.id);
   });
   // Escape with the focus in the page: the bar cannot hear it, so it is passed on.
   window.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
     if (mode || pins.some(function (p) { return p.active; })) send({ ontic: "comment-escape" });
   }, true);
-  window.addEventListener("scroll", function () { if (pins.length) schedule(); },
-                          { capture: true, passive: true });
-  window.addEventListener("resize", function () { if (pins.length) schedule(); });
-  window.addEventListener("load", function () { if (pins.length) schedule(); });
+  window.addEventListener("scroll", schedule, { capture: true, passive: true });
+  window.addEventListener("resize", schedule);
+  window.addEventListener("load", schedule);
   if (window.ResizeObserver) {
-    var observer = new ResizeObserver(function () { if (pins.length) schedule(); });
+    var observer = new ResizeObserver(schedule);
     var watch = function () {
       observer.observe(document.documentElement);
       if (document.body) observer.observe(document.body);
     };
     if (document.body) watch();
     else document.addEventListener("DOMContentLoaded", watch);
+  }
+  // The page changing under the pins (content added, text or classes changed): place them again.
+  // Our overlay sits outside <body>, so drawing it is not a change seen here.
+  if (window.MutationObserver) {
+    var changes = new MutationObserver(schedule);
+    var watchBody = function () {
+      if (document.body) {
+        changes.observe(document.body, { childList: true, subtree: true, attributes: true,
+                                         characterData: true });
+      }
+    };
+    if (document.body) watchBody();
+    else document.addEventListener("DOMContentLoaded", watchBody);
   }
 })();

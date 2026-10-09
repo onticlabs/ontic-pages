@@ -1,10 +1,11 @@
 // Comments in the bar: the comment toggle and its menu, the thread popover, the side panel with
-// every thread, and the pins the page's bridge draws (static/pins.js). For signed-in viewers
-// only (the shell loads this file only for them). Every comment is read and written here, at
-// the apex, with the viewer's own sign-in; the frame only gets ids, initials, colors, anchors
-// and flags, never a comment's text or an email. Messages are accepted only from the page's
-// exact content origin and from the frame itself. Everything a person wrote is set with
-// textContent, never as HTML.
+// every thread, and the pins the page's bridge draws (static/pins.js). A thread is attached to
+// an element of the page: the bridge outlines it while its thread is open, and while the pointer
+// is on its card here. For signed-in viewers only (the shell loads this file only for them).
+// Every comment is read and written here, at the apex, with the viewer's own sign-in; the frame
+// only gets ids, initials, colors, anchors and flags, never a comment's text or an email.
+// Messages are accepted only from the page's exact content origin and from the frame itself.
+// Everything a person wrote is set with textContent, never as HTML.
 //
 // Loaded after bar.js, without defer: bar.js handles the same messages first (it may promote a
 // new version's frame to be the frame before this sees its "ready").
@@ -123,6 +124,19 @@
     when.title = iso ? iso.slice(0, 16).replace("T", " ") + " UTC" : "";
     line.appendChild(when);
     return line;
+  }
+  // The element a thread is attached to, named: its tag (from the anchor, or for older threads
+  // the end of its selector) and the start of its text.
+  function tagOf(anchor) {
+    if (anchor.tag) return anchor.tag;
+    var m = /(?:^|[\s>])([a-z][a-z0-9-]*)(?::nth-of-type\(\d+\))?$/i.exec(anchor.selector || "");
+    return m ? m[1].toLowerCase() : "";
+  }
+  function elementName(anchor, container) {
+    var tag = tagOf(anchor);
+    if (tag) container.appendChild(el("span", "cm-tag", tag));
+    if (anchor.snippet) container.appendChild(el("span", "cm-snippet", anchor.snippet));
+    return container;
   }
   function threadById(id) {
     return state.threads.filter(function (t) { return t.id === id; })[0] || null;
@@ -408,8 +422,9 @@
       head.appendChild(back);
     }
     var anchor = thread.anchor || {};
-    var title = el("span", "cm-title", anchor.snippet ? "\u201c" + anchor.snippet + "\u201d"
-      : "Comment on " + (anchor.path || "/"));
+    var title = el("span", "cm-title");
+    if (anchor.snippet || tagOf(anchor)) elementName(anchor, title);
+    else title.textContent = "Comment on " + (anchor.path || "/");
     head.appendChild(title);
     var resolve = button("cm-icon cm-resolve", "check", thread.resolved ? "Reopen" : "Resolve");
     resolve.setAttribute("aria-pressed", thread.resolved ? "true" : "false");
@@ -492,6 +507,7 @@
     side.hidden = true;
     side.textContent = "";
     document.body.classList.remove("cm-side-open");
+    post({ ontic: "highlight", id: null });
     sendPins();
   }
   function showInPanel(id) {
@@ -536,7 +552,7 @@
     var here = path === pagePath();
     var node = el("button", "cm-card");
     node.type = "button";
-    if (anchor.snippet) node.appendChild(el("span", "cm-quote", anchor.snippet));
+    if (anchor.snippet || tagOf(anchor)) node.appendChild(elementName(anchor, el("span", "cm-quote")));
     node.appendChild(byline(thread.created_by_name, thread.created_by, thread.created_at));
     node.appendChild(first.deleted ? el("span", "cm-text cm-deleted", "deleted")
       : el("span", "cm-text", first.body));
@@ -551,6 +567,15 @@
     }
     if (meta.childNodes.length) node.appendChild(meta);
     node.addEventListener("click", function () { openFromList(thread.id); });
+    // Its element on the page, outlined while the pointer or the focus is on the card.
+    if (here) {
+      var on = function () { post({ ontic: "highlight", id: thread.id }); };
+      var off = function () { post({ ontic: "highlight", id: null }); };
+      node.addEventListener("mouseenter", on);
+      node.addEventListener("focus", on);
+      node.addEventListener("mouseleave", off);
+      node.addEventListener("blur", off);
+    }
     return node;
   }
 
