@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import gateway, remote, skills
+from . import comments_cli, gateway, remote, skills
 from .auth import DEFAULT_AUTH_URL
 from .cache import MB
 from .config import Config, load_config, token_path
@@ -301,6 +301,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("url", help="print a page's URL")
     s.add_argument("name")
     s.set_defaults(func=cmd_url)
+
+    comments_cli.add_commands(sub)
 
     s = sub.add_parser(
         "skill", help="show where the agent skill is installed for Claude Code and Codex"
