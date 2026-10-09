@@ -55,8 +55,10 @@ deploy.
    ```
 
 2. **Bucket key: read and write, no delete.** The gateway is the only holder of a key: it
-   writes each version's `page.json`, `<name>/current` and `<name>/visibility`, and signs the
-   presigned PUT URLs the command line uploads files with. The `ontic-pages-publish` key has exactly the right capabilities
+   writes each version's `page.json`, `<name>/current` and `<name>/visibility`, signs the
+   presigned PUT URLs the command line uploads files with (and the GET URLs of `pull`), and
+   for a text edit saved in the bar copies the version's files inside the bucket and writes
+   the edited HTML file. The `ontic-pages-publish` key has exactly the right capabilities
    (`listBuckets,listFiles,readFiles,writeFiles`, scoped to the bucket); reuse it, or
    make one for the gateway alone:
 

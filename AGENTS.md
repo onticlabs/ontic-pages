@@ -12,6 +12,11 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   version (page.json, visibility, current); shared by `--direct` and the gateway's commit.
 - `src/ontic_pages/uploads.py`: publishing through the gateway, its side: checks the file list,
   picks the version, presigned PUT URLs, the size check and the commit.
+- `src/ontic_pages/edits.py`: text edited in the bar, the gateway's side: finds each changed text
+  in the HTML source (exactly once, else nothing is saved), and writes a new version (server-side
+  copies of the other files, the patched file, page.json with `edited_from`).
+- `src/ontic_pages/pull.py`: `ontic-pages pull`: the gateway's presigned GET URLs for a version's
+  files, and downloading them into a folder.
 - `src/ontic_pages/tokens.py`: the command line's tokens (HMAC signed, 30 days) and the login
   codes of the browser hand-off. In memory only.
 - `src/ontic_pages/remote.py`: the command line's side of the gateway: the token file, JSON
@@ -30,14 +35,18 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   bar.css), the bridge script added to framed HTML, and the command line's login page
   (login.js). Static files are package data, served
   at content-hashed URLs. User text goes into the bar with textContent, never innerHTML.
+  A feature in files of its own is served as part of these (`shell.BUNDLES`): edit text in place
+  is `edit.js` (after bar.js, hooked in through `window.onticBar`), `edit.css` (after bar.css)
+  and `edit-bridge.js` (after bridge.js). Its bridge messages: `edit-mode`, `edit-state`, `edits`.
 - `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
   (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
   Edit the skill text there, never in an installed copy.
 - `src/ontic_pages/cli.py`: argparse commands.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
-  `helpers.upload_server` takes its presigned PUTs). `test_js.py` runs bridge.js and bar.js in
-  node (skipped without node).
+  `helpers.upload_server` takes its presigned PUTs and answers its GETs). `test_js.py` runs
+  bridge.js and bar.js in node, `test_edit_js.py` the served edit mode in a small fake DOM
+  (skipped without node).
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules

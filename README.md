@@ -5,7 +5,8 @@ under a name, and it is served at `https://pages.onticlabs.io/<name>/`, inside a
 slim bar (title menu with the versions, Share panel), from its own host
 `https://<name>.pages.onticlabs.io/`. Each page is private (only you), ontic (the
 signed-in team, the default) or public (anyone with the link). Each publish is a
-new version; nothing is ever deleted.
+new version; nothing is ever deleted. The owner can also fix text right in the
+browser (Edit in the bar); Save writes that as a new version too.
 
 The only "provenance" is metadata: who published, when, an optional
 description, any `--meta key=value` you pass (for example `model=sha256:...`), and
@@ -63,6 +64,7 @@ ontic-pages info depth-eval          # everything page.json says, plus the versi
 ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
 ontic-pages share depth-eval public  # private, ontic or public
 ontic-pages url depth-eval           # its URL
+ontic-pages pull depth-eval ./current   # download the current version (--version for another)
 ```
 
 Anyone with an `@onticlabs.io` account may create a page; only its owner (the publisher of the
@@ -70,9 +72,33 @@ current version) may publish a new version of it, `share` it or `set-current`. A
 up to 8 files at a time (each retried twice), at most 5000 files and 5 GB per version; nothing
 becomes visible until every file is in the bucket with the size announced.
 
+`pull` writes every file of a version but `page.json` into a new or empty folder (default
+`./<name>`), downloaded straight from the bucket with short-lived URLs the gateway hands out. Use
+it to see what is published now, for example after someone fixed text in the browser.
+
+### Edit text in place
+
+The owner of a page, looking at its current version in the bar, gets an **Edit** button. In edit
+mode every element that holds nothing but text (paragraphs, headings, list items, table cells,
+links, captions, ...) can be typed into, with a light dashed outline; links and buttons do
+nothing meanwhile. The bar shows how many texts changed, Save and Cancel; Escape or Cancel leaves
+without saving (it asks first when something changed). Save writes a new version and the page
+fades over to it; the older versions stay in the title menu.
+
+The gateway finds each changed text in the HTML file's source (its text only, not tags, scripts,
+styles or the title; as written or with `&amp;`-style references) and replaces just the changed
+part, escaped. Each text must be there exactly once (a text that fills a whole element wins over
+the same words inside a longer one); if any change cannot be placed (written by a script, or
+there several times), nothing is saved and the bar says which. A save on a version that is no
+longer current (published meanwhile) is refused: reload and edit again. The new version copies
+every other file inside the bucket (server side), has the edited HTML file, and a `page.json`
+with you as `published_by`, the old description, git and meta, plus `edited_from=<the version
+you edited>` in meta. So before publishing a page again from its source, check
+`ontic-pages info <name>` for `edited_from` and carry those edits over (`pull` it and compare).
+
 ### Without the gateway: `--direct`
 
-Admins with a bucket key can skip the gateway: `publish`, `list`, `info`, `share` and
+Admins with a bucket key can skip the gateway: `publish`, `list`, `info`, `pull`, `share` and
 `set-current` take `--direct` (or set `ONTIC_PAGES_DIRECT=1`) and then read and write the bucket
 with your own key. `published_by` is then `ONTIC_PAGES_EMAIL`, else git `user.email`, and the
 owner rules above are not checked. The key goes in the config below.
@@ -187,7 +213,7 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 | `published_at` | the same time in ISO 8601 |
 | `published_by` | the signed-in email (with `--direct`: `ONTIC_PAGES_EMAIL`, else git `user.email`, else `$USER`) |
 | `description` | from `--description`, may be empty |
-| `meta` | map of strings from `--meta key=value` |
+| `meta` | map of strings from `--meta key=value`; a version saved from Edit in the bar adds `edited_from` (the version it was edited from) |
 | `git` | `{remote, branch, commit, dirty}` of the directory you published from, or null outside a git repo |
 | `files` | how many files the version has |
 
@@ -203,8 +229,10 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
   `/<name>/_v/<version>/<path>` the same for one version; `/<name>/_info` is a plain
   page with what page.json says and every version; `/_api/pages/<name>` gives the
   page facts as JSON, and `POST /_api/pages/<name>/visibility` changes visibility
-  (owner only, from the bar or the command line). The command line uses the rest of `/_api/`
-  (list, info, current, publish) and `/_cli/login`; see `gateway.py` for the routes.
+  (owner only, from the bar or the command line); `POST /_api/pages/<name>/edits` saves text
+  edited in the bar (owner only). The command line uses the rest of `/_api/`
+  (list, info, current, publish, files for `pull`) and `/_cli/login`; see `gateway.py` for the
+  routes.
 - **The page's own host** (`<name>.pages.onticlabs.io`): `/<path>` serves the
   current version's files (content types, `index.html` for folders, Range requests
   for video, ETags and 304s), `/_v/<version>/<path>` a given version, cached for a
@@ -213,7 +241,8 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 
 The bar: the home link, the title menu (who published, when, the description, the
 versions, Copy link, Open without the bar, Page info, All pages), an "old version"
-marker, your initial (or Sign in), and Share (owner, general access, Copy link).
+marker, Edit (the owner, on the current version; see Edit text in place), your initial (or
+Sign in), and Share (owner, general access, Copy link).
 Escape or a click elsewhere, in the page too, closes a menu. The page fades in once
 it is ready, a spinner shows only when it takes a while, and when a new version is
 published while you look, it fades in where you were. The gateway adds one small
