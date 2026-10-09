@@ -3,6 +3,7 @@ at the bucket root):
 
     <prefix><name>/current                   the current version id, as text
     <prefix><name>/visibility                private, ontic or public (absent means ontic)
+    <prefix><name>/comments.json             the comments, written by the gateway (comments.py)
     <prefix><name>/<version>/page.json       metadata of that version
     <prefix><name>/<version>/<files...>      the page itself
 
