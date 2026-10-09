@@ -11,7 +11,7 @@
   if (!bar) return;
 
   var NOTE = "Text only. Saved as a new version; older versions stay in the title menu.";
-  var state = "off"; // off, editing, saving
+  var state = "off"; // off, editing, saving (asked the page), posting (sent to the gateway)
   var changes = 0;
   var version = null; // the version being edited
   var timer = 0;
@@ -52,8 +52,9 @@
     var on = state !== "off";
     ui.edit.hidden = on || !allowed();
     ui.tools.hidden = !on;
-    ui.count.textContent = state === "saving" ? "Saving…" : "Editing: " + changesText(changes);
-    ui.save.disabled = ui.cancel.disabled = state === "saving";
+    var busy = state === "saving" || state === "posting";
+    ui.count.textContent = busy ? "Saving…" : "Editing: " + changesText(changes);
+    ui.save.disabled = ui.cancel.disabled = busy;
     document.body.classList.toggle("editing", on);
   }
 
@@ -87,9 +88,9 @@
   }
 
   function cancel() {
-    if (state === "saving") return;
-    if (state === "editing" && changes > 0) show("", true);
-    else if (state === "editing") leave();
+    if (state !== "editing") return;
+    if (changes > 0) show("", true);
+    else leave();
   }
 
   function save() {
@@ -104,7 +105,7 @@
   }
 
   function failed(error) {
-    if (state !== "saving") return;
+    if (state !== "saving" && state !== "posting") return;
     clearTimeout(timer);
     state = "editing";
     post({ ontic: "edit-mode", on: true }); // the edits are still in the page
@@ -132,6 +133,7 @@
       state = "editing";
       return leave();
     }
+    state = "posting"; // another answer from the page is not sent again
     var name = bar.page().name;
     fetch("/_api/pages/" + encodeURIComponent(name) + "/edits", {
       method: "POST",

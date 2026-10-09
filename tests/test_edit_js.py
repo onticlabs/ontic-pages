@@ -253,6 +253,7 @@ function frames() { return swaps; }
     { current: "v2", versions: [{ version: "v2" }, { version: "v1" }] });
   answers.push({ ok: true, status: 200, body: { version: "v2", page: next } });
   message({ ontic: "edits", path: "/", changes: [{ before: "a", after: "b" }] });
+  out.again = message({ ontic: "edits", path: "/", changes: [] }); // ignored while sending
   await tick(); await tick(); await tick();
   out.fetch = fetches.slice();
   out.saved = [q("edit-tools").hidden, q("edit-btn").hidden, q("edit-done").hidden, frames()];
@@ -356,6 +357,7 @@ def test_bar_edit_flow():
         "/_api/pages/report/edits", "POST",
         {"version": "v1", "path": "/", "changes": [{"before": "a", "after": "b"}]},
     ]]  # fmt: skip
+    assert out["again"] == []
     assert out["saved"] == [True, False, False, 1]  # the new version is loading in a frame
     version, error, panel_hidden, posts, count = out["refused"]
     assert version == "v2" and error == "a newer version was published" and not panel_hidden
