@@ -126,6 +126,18 @@ class Store:
         )
         return url, {"Content-Type": ctype}
 
+    def presign_get(self, key: str, seconds: int = 3600) -> str:
+        """A URL that lets its holder GET this one key for `seconds`."""
+        return self.client.generate_presigned_url(
+            "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=seconds
+        )
+
+    def copy(self, src: str, dst: str) -> None:
+        """A server-side copy within the bucket (the bytes stay in the store), with its type."""
+        self.client.copy_object(
+            Bucket=self.bucket, Key=dst, CopySource={"Bucket": self.bucket, "Key": src}
+        )
+
     def sizes(self, prefix: str) -> dict[str, int]:
         """Key (below prefix) -> size, for every object under prefix."""
         out, token = {}, None

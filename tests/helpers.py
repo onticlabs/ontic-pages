@@ -79,9 +79,10 @@ def start_local(store, **kwargs):
 
 
 def upload_server(s3):
-    """Stands in for the bucket's presigned PUT: stores into the fake S3 at the URLs its
+    """Stands in for the bucket's presigned PUT and GET: stores into the fake S3 at the URLs its
     generate_presigned_url makes, and refuses a Content-Type other than the signed one (403),
-    as S3 does. `fail` (a list) makes the next PUTs answer 500."""
+    as S3 does; GET answers a stored object. `fail` (a list) makes the next requests answer
+    500."""
 
     class Put(BaseHTTPRequestHandler):
         def do_PUT(self):
@@ -102,11 +103,26 @@ def upload_server(s3):
             self.send_header("Content-Length", "0")
             self.end_headers()
 
+        def do_GET(self):
+            url = urlsplit(self.path)
+            bucket, _, key = unquote(url.path)[1:].partition("/")
+            srv.gets.append(key)
+            found = s3.objects.get((bucket, key)) if "get" in parse_qs(url.query) else None
+            code = 200 if found else 404
+            if srv.fail:
+                srv.fail.pop()
+                code, found = 500, None
+            data = found[0] if found else b""
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def log_message(self, *args):
             pass
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Put)
-    srv.puts, srv.fail = [], []
+    srv.puts, srv.gets, srv.fail = [], [], []
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     s3.upload_base = f"http://127.0.0.1:{srv.server_port}"
     return srv

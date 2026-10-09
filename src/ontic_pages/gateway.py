@@ -10,6 +10,7 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /public/<name>/<path>          old links: redirects to /<name>/<path>
     GET  /_api/pages/<name>             the page facts this viewer may see, as JSON
     GET  /_api/pages/<name>/info        every version's page.json (signed in)
+    GET  /_api/pages/<name>/files       a version's files with presigned GET URLs (pull.py)
     GET  /_api/pages                    the pages this viewer may open (signed in)
     GET  /_api/me                       who is asking
     POST /_api/pages/<name>/visibility  {"visibility": ...}, by the owner only
@@ -20,6 +21,8 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     POST /_api/pages/<name>/comments    {"anchor", "version", "body"}: a new thread; then
                                         .../<thread>/reply {"body"}, .../<thread>/resolve
                                         {"resolved"}, .../<thread>/<comment>/delete (its author)
+    POST /_api/pages/<name>/edits       {version, path, changes}: text edited in the bar, saved
+                                        as a new version, by the owner only (edits.py)
     GET  /_cli/login?code=              the command line's sign-in: Allow (tokens.py)
     POST /_api/cli/approve              {"code": ...}, from that page
     GET  /_api/cli/token?code=          the command line asks for its token
@@ -68,7 +71,9 @@ from .cache import MB, FileCache, PageCache
 from .comments import Comments, listing
 from .comments import view as thread_view
 from .config import DEFAULT_URL
+from .edits import save as save_edits
 from .info import DESCRIPTION_CHARS, NAME_CHARS, history, info_html, short
+from .pull import presigned_files
 from .shell import Assets, inject, login_html, shell_csp, shell_html
 from .store import (
     NAME_RE,
@@ -87,8 +92,10 @@ YEAR = "max-age=31536000, immutable"
 VERSIONED = re.compile(r"^_v/(\d{8}T\d{6}Z)(/.*)?$")
 API_PAGE = re.compile(r"^/_api/pages/([^/]+)$")
 API_INFO = re.compile(r"^/_api/pages/([^/]+)/info$")
+API_FILES = re.compile(r"^/_api/pages/([^/]+)/files$")
 API_WRITE = re.compile(
-    r"^/_api/pages/([^/]+)/(visibility|current|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+    r"^/_api/pages/([^/]+)/"
+    r"(visibility|current|edits|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
 )
 API_COMMENTS = re.compile(r"^/_api/pages/([^/]+)/comments$")
 COMMENT_WRITE = re.compile(
@@ -430,6 +437,8 @@ def make_handler(gw: Gateway):
                 return self.api_info(m.group(1))
             if m := API_COMMENTS.match(path):
                 return self.api_comments(m.group(1))
+            if m := API_FILES.match(path):
+                return self.api_files(m.group(1), query)
             if path == "/_api/pages":
                 return self.api_list()
             if path == "/_api/me":
@@ -512,6 +521,20 @@ def make_handler(gw: Gateway):
                 current, metas = history(gw.store, name)
                 self.send_json(200, {
                     "name": name, "current": current, "visibility": found[1], "versions": metas,
+                })  # fmt: skip
+
+        def api_files(self, name: str, query: str):
+            """A version's files (the current one by default) with presigned GET URLs, for
+            `ontic-pages pull`: the bytes come from the bucket, not through here. Signed in."""
+            if found := self.api_page(name, required=True):
+                if not found[3]:
+                    return self.send_json(401, {"error": EXPIRED})
+                version = parse_qs(query).get("version", [found[0]])[0]
+                if not VERSION_RE.match(version) or version not in gw.store.versions(name):
+                    return self.send_json(404, {"error": f"{name} has no version {version}"})
+                self.send_json(200, {
+                    "name": name, "version": version, "page": gw.store.meta(name, version),
+                    "files": presigned_files(gw.store, name, version),
                 })  # fmt: skip
 
         def api_list(self):
@@ -597,6 +620,7 @@ def make_handler(gw: Gateway):
             m = API_WRITE.match(path)
             c = COMMENT_WRITE.match(path)
             big = bool(m and m.group(2).startswith("versions") and m.group(4) != "commit")
+            big = big or bool(m and m.group(2) == "edits")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -635,6 +659,8 @@ def make_handler(gw: Gateway):
                     return self.publish_start(name, data)
                 if m.group(3):
                     return self.publish_more(name, m.group(3), m.group(4), data)
+                if m.group(2) == "edits":
+                    return self.save_edits(name, data)
                 found = self.api_page(name, required=True)
                 if not found:
                     return
@@ -768,6 +794,24 @@ def make_handler(gw: Gateway):
                 "page": page, "visibility": gw.store.visibility(name),
                 "url": f"{site.origin}/{quote(name)}/",
             })  # fmt: skip
+
+        def save_edits(self, name: str, data):
+            """Text edited in the bar, as a new version (edits.py checks owner and version)."""
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            email = found[3]
+            if not email:
+                raise Refused(401, EXPIRED)
+            if email.strip().lower() != found[2].strip().lower():
+                raise Refused(403, "only the owner can edit this page")
+            if not gw.limit.allow(email.lower()):
+                raise Refused(429, "too many changes, wait a minute")
+            page = save_edits(gw.store, name, email, data, gw.uploads)
+            gw.pages.forget(name)
+            edited = page["meta"]["edited_from"]
+            self.log_message("edit %s %s from %s", name, page["version"], edited)
+            self.send_json(200, {"version": page["version"], "page": gw.facts(name, email)})
 
         # --- the content host ---------------------------------------------------------------
 

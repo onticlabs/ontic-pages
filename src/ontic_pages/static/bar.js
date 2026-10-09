@@ -24,6 +24,20 @@
 
   function $(id) { return document.getElementById(id); }
   function frame() { return $("frame"); }
+
+  // Features in files of their own (edit.js, served after this one) hook in here: message(msg)
+  // for each message from the frame, render() after the bar is drawn, holds() true to keep a new
+  // version from fading in over unsaved work. The page in the frame cannot reach this object.
+  var features = [];
+  window.onticBar = {
+    add: function (feature) { features.push(feature); },
+    page: function () { return page; },
+    view: view,
+    origin: origin,
+    frame: frame,
+    update: function (next) { update(next); },
+    swap: function () { swap(); }
+  };
   function isNumber(y) { return typeof y === "number" && isFinite(y) && y >= 0 && y < 1e9; }
 
   // ---- the frame: fade in when ready, a spinner only when slow ------------------------------
@@ -64,6 +78,7 @@
     var fromFrame = f && event.source === f.contentWindow;
     var fromPending = pending && event.source === pending.contentWindow;
     if (!fromFrame && !fromPending) return;
+    if (fromFrame) features.forEach(function (f) { if (f.message) f.message(msg); });
     switch (msg.ontic) {
       case "ready":
         if (fromPending) promote(); else reveal();
@@ -197,6 +212,7 @@
     var option = select.options[select.selectedIndex];
     $("s-explain").textContent = option ? option.getAttribute("data-explain") : "";
     $("s-owner").textContent = page.published_by || "Sign in to see who";
+    features.forEach(function (f) { if (f.render) f.render(); });
   }
 
   // ---- copy, share ---------------------------------------------------------------------------
@@ -261,13 +277,18 @@
     lastFetch = Date.now();
     fetch("/_api/pages/" + encodeURIComponent(name), { credentials: "same-origin", cache: "no-store" })
       .then(function (response) { return response.ok ? response.json() : null; })
-      .then(function (next) {
-        if (!next || next.name !== name || !Array.isArray(next.versions)) return;
-        var changed = next.current !== page.current;
-        page = next;
-        render();
-        if (changed && !view.version) swap();
-      }, function () { /* offline: try again later */ });
+      .then(update, function () { /* offline: try again later */ });
+  }
+
+  // New page facts: draw them, and fade in a new current version unless a feature holds the
+  // frame (unsaved edits in it).
+  function update(next) {
+    if (!next || next.name !== name || !Array.isArray(next.versions)) return;
+    var changed = next.current !== page.current;
+    page = next;
+    render();
+    var held = features.some(function (f) { return f.holds && f.holds(); });
+    if (changed && !view.version && !held) swap();
   }
 
   function swap() {

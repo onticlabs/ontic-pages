@@ -164,11 +164,11 @@ def test_shell_has_comments_when_signed_in(serve, store, report):
         assert status == 200 and data
         assert headers["Cache-Control"] == "public, max-age=31536000, immutable"
     assert len(re.findall(r"/_bar/comments\.", body)) == 2
-    # The pins come with the bridge, in the same script.
+    # The pins come with the bridge, in the same script (with the edit part: one apex each).
     framed = request(srv, "/", host=f"report.{APEX}", headers=FRAME)[2]
     bridge = re.search(rb'src="(/_bridge\.[0-9a-f]+\.js)"', framed).group(1).decode()
     script = request(srv, bridge, host=f"report.{APEX}")[2]
-    assert b'"comment-at"' in script and script.count(f'"{ORIGIN}"'.encode()) == 2
+    assert b'"comment-at"' in script and script.count(f'"{ORIGIN}"'.encode()) == 3
     # Signed out on a public page: no comments at all.
     store.set_visibility("report", "public")
     body = request(srv, "/report/", who=None)[2].decode()

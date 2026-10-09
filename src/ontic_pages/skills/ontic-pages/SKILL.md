@@ -96,6 +96,13 @@ Nothing is ever deleted. To change a page published earlier, fix the files and p
 under the same name; open viewers see the new version without reloading. In a new session, find
 the name with `ontic pages list`; never guess it from a file name.
 
+The owner can also fix text in the browser (Edit in the bar), which saves a new version, so your
+last published files may not be the newest. Before publishing a page again, run
+`ontic pages info <name>`: if the current version's meta has `edited_from`, download it with
+`ontic pages pull <name> /tmp/<name>-current`, compare its HTML with your source
+(`diff -r`), carry those text changes into the source (or the code that generates it), then
+publish.
+
 ## Comments
 
 Signed-in viewers pin comments to points on a page, reply and resolve them in the bar. They are
