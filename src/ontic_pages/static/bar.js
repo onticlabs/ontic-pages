@@ -24,6 +24,26 @@
 
   function $(id) { return document.getElementById(id); }
   function frame() { return $("frame"); }
+
+  // Features in files of their own (details.js, edit.js, served after this one) hook in here:
+  // message(msg) for each message from the frame, render() after the bar is drawn, opened(id)
+  // when a menu or panel opens, holds() true to keep a new version from fading in over unsaved
+  // work. The page in the frame cannot reach this object.
+  var features = [];
+  window.onticBar = {
+    add: function (feature) { features.push(feature); },
+    page: function () { return page; },
+    view: view,
+    origin: origin,
+    frame: frame,
+    update: function (next) { update(next); },
+    swap: function () { swap(); },
+    close: function () { closeAll(); },
+    open: function (panelId) { openPop(panelId); },
+    copy: function (button, text) { copy(button, text); },
+    relative: function (iso) { return relative(iso); },
+    when: function (iso) { return when(iso); }
+  };
   function isNumber(y) { return typeof y === "number" && isFinite(y) && y >= 0 && y < 1e9; }
 
   // ---- the frame: fade in when ready, a spinner only when slow ------------------------------
@@ -64,9 +84,15 @@
     var fromFrame = f && event.source === f.contentWindow;
     var fromPending = pending && event.source === pending.contentWindow;
     if (!fromFrame && !fromPending) return;
+    // A new version's frame that says it is ready becomes the frame, then the features hear it.
+    if (fromPending && msg.ontic === "ready") {
+      promote();
+      fromFrame = true;
+    }
+    if (fromFrame) features.forEach(function (f) { if (f.message) f.message(msg); });
     switch (msg.ontic) {
       case "ready":
-        if (fromPending) promote(); else reveal();
+        if (!fromPending) reveal();
         break;
       case "nav":
         if (fromFrame && typeof msg.path === "string" && typeof msg.title === "string") {
@@ -82,7 +108,7 @@
       case "open":
         if (fromFrame && typeof msg.url === "string") openTop(msg.url);
         break;
-      // Later: comment pins and edit mode get their own types here.
+      // Comments (comments.js) and edit text in place (edit.js) handle their own types.
     }
   });
 
@@ -114,7 +140,8 @@
 
   // ---- menus ---------------------------------------------------------------------------------
 
-  var pops = [["title-btn", "title-menu"], ["share-btn", "share-panel"]];
+  var pops = [["title-btn", "title-menu"], ["info-btn", "info-panel"],
+    ["share-btn", "share-panel"]];
   function closeAll(except) {
     pops.forEach(function (pair) {
       if (pair[1] === except) return;
@@ -131,7 +158,15 @@
     closeAll(pair[1]);
     box.hidden = !open;
     button.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) render();
+    if (!open) return;
+    features.forEach(function (f) { if (f.opened) f.opened(pair[1]); });
+    render();
+  }
+  // Opens the pop whose box is `id` (closing the others), unless it is open already.
+  function openPop(id) {
+    var pair = pops.filter(function (p) { return p[1] === id; })[0];
+    var box = pair && $(pair[1]);
+    if (box && box.hidden) toggle(pair);
   }
 
   // ---- what the bar shows ------------------------------------------------------------------
@@ -197,12 +232,16 @@
     var option = select.options[select.selectedIndex];
     $("s-explain").textContent = option ? option.getAttribute("data-explain") : "";
     $("s-owner").textContent = page.published_by || "Sign in to see who";
+    features.forEach(function (f) { if (f.render) f.render(); });
   }
 
   // ---- copy, share ---------------------------------------------------------------------------
 
-  function copy(button) {
-    var text = location.href;
+  // Copies `text` (the page's address by default), then says so on the button for a moment.
+  // Called inside the click handler, as the clipboard asks; else a selected textarea and
+  // execCommand.
+  function copy(button, text) {
+    text = typeof text === "string" ? text : location.href;
     var say = function (word) {
       var before = button.getAttribute("data-label") || button.textContent;
       button.setAttribute("data-label", before);
@@ -261,13 +300,18 @@
     lastFetch = Date.now();
     fetch("/_api/pages/" + encodeURIComponent(name), { credentials: "same-origin", cache: "no-store" })
       .then(function (response) { return response.ok ? response.json() : null; })
-      .then(function (next) {
-        if (!next || next.name !== name || !Array.isArray(next.versions)) return;
-        var changed = next.current !== page.current;
-        page = next;
-        render();
-        if (changed && !view.version) swap();
-      }, function () { /* offline: try again later */ });
+      .then(update, function () { /* offline: try again later */ });
+  }
+
+  // New page facts: draw them, and fade in a new current version unless a feature holds the
+  // frame (unsaved edits in it).
+  function update(next) {
+    if (!next || next.name !== name || !Array.isArray(next.versions)) return;
+    var changed = next.current !== page.current;
+    page = next;
+    render();
+    var held = features.some(function (f) { return f.holds && f.holds(); });
+    if (changed && !view.version && !held) swap();
   }
 
   function swap() {
@@ -334,7 +378,8 @@
       var f = frame();
       f.src = origin + path;
     });
-    if (location.hash && path.indexOf("#") < 0) {
+    // #comment=<id> is for the bar (comments.js), not the page.
+    if (location.hash && path.indexOf("#") < 0 && location.hash.indexOf("#comment=") !== 0) {
       path += location.hash;
       frame().src = origin + path;
     }

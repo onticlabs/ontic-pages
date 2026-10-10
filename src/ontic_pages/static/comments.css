@@ -1,0 +1,145 @@
+/* Comments in the bar (comments.js): the toggle, the popover, the side panel. Uses the colors of
+   bar.css, so light and dark follow it. */
+
+.cm { display: flex; align-items: center; flex: none; }
+.cm-toggle { position: relative; width: auto; min-width: 30px; padding: 0 6px; gap: 4px; }
+.cm-toggle[aria-pressed="true"] { background: var(--hover); color: var(--accent); }
+.cm-more { width: 18px; margin-left: -2px; }
+.cm-more[aria-expanded="true"] { background: var(--hover); }
+.cm-count {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font-size: 11px;
+  font-weight: 600; line-height: 16px; text-align: center; color: #fff; background: var(--accent);
+}
+.cm .menu { left: auto; right: 0; min-width: 220px; }
+.cm .item[role="menuitemcheckbox"] { display: flex; align-items: center; gap: 8px; }
+.cm-switch {
+  margin-left: auto; width: 26px; height: 16px; border-radius: 8px; background: var(--line);
+  position: relative; flex: none; transition: background .15s;
+}
+.cm-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  border-radius: 50%; background: #fff; transition: left .15s;
+}
+[aria-checked="true"] > .cm-switch { background: var(--accent); }
+[aria-checked="true"] > .cm-switch::after { left: 12px; }
+
+/* The popover and the side panel share the thread view. */
+.cm-pop, .cm-side { color: var(--text); background: var(--bg); }
+.cm-pop {
+  position: fixed; z-index: 25; width: 320px; max-width: calc(100vw - 16px);
+  max-height: min(70vh, 520px); display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);
+}
+.cm-side {
+  position: fixed; z-index: 15; top: 40px; right: 0; bottom: 0; width: 340px;
+  display: flex; flex-direction: column; border-left: 1px solid var(--line);
+  background: var(--bar-bg);
+}
+body.cm-side-open .stage { right: 340px; }
+.cm-head {
+  display: flex; align-items: center; gap: 2px; padding: 6px 6px 6px 12px; flex: none;
+  border-bottom: 1px solid var(--line);
+}
+.cm-side.cm-detail .cm-head { padding-left: 4px; }
+.cm-title {
+  flex: 1 1 auto; min-width: 0; margin: 0; font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cm-icon, .cm-send {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--muted); cursor: pointer;
+}
+.cm-icon:hover { background: var(--hover); color: var(--text); }
+.cm-resolve[aria-pressed="true"], .cm-done { color: var(--accent); }
+.cm-icon svg { width: 16px; height: 16px; }
+.cm-note { margin: 8px 12px 0; color: var(--muted); font-size: 12px; }
+.cm-items { overflow: auto; padding: 4px 12px; flex: 1 1 auto; min-height: 0; }
+.cm-item { padding: 8px 0; }
+.cm-item + .cm-item { border-top: 1px solid var(--line); }
+.cm-byline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cm-avatar {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 20px; height: 20px; border-radius: 50%; color: #fff; font-size: 11px; font-weight: 600;
+}
+.cm-who { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.cm-delete { margin-left: auto; width: 24px; height: 24px; opacity: 0; }
+.cm-item:hover .cm-delete, .cm-delete:focus-visible { opacity: 1; }
+@media (hover: none) { .cm-delete { opacity: 1; } }
+.cm-text {
+  display: block; margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.cm-deleted { color: var(--muted); font-style: italic; }
+.cm-reply {
+  display: flex; align-items: flex-end; gap: 6px; margin: 8px; padding: 4px 4px 4px 10px;
+  flex: none; border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}
+.cm-reply:focus-within { border-color: var(--accent); }
+.cm-reply textarea {
+  flex: 1 1 auto; min-width: 0; min-height: 20px; max-height: 140px; padding: 4px 0;
+  border: 0; outline: 0; resize: none; background: none; font: inherit; line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.cm-reply textarea::placeholder { color: var(--muted); }
+.cm-send { width: 28px; height: 28px; background: var(--accent); color: #fff; }
+.cm-send:disabled { opacity: .35; cursor: default; }
+.cm-error { margin: 0 12px 8px; color: var(--danger); font-size: 13px; }
+
+.cm-list { overflow: auto; padding: 6px; flex: 1 1 auto; }
+.cm-card {
+  display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px;
+  background: none; color: var(--text); text-align: left; cursor: pointer;
+}
+.cm-card:hover, .cm-card:focus-visible { background: var(--hover); }
+.cm-card + .cm-card { margin-top: 2px; }
+.cm-quote {
+  display: block; margin-bottom: 4px; padding-left: 6px; border-left: 2px solid var(--line);
+  color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The element a thread is attached to: its tag, then the start of its text. */
+.cm-tag {
+  display: inline-block; margin-right: 6px; padding: 0 4px; border-radius: 4px;
+  background: var(--hover); color: var(--text); font: 500 11px/16px ui-monospace, monospace;
+  vertical-align: 1px;
+}
+.cm-title .cm-tag { font-weight: 600; }
+.cm-snippet::before { content: "\201c"; }
+.cm-snippet::after { content: "\201d"; }
+.cm-card .cm-text {
+  display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cm-meta {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; color: var(--muted); font-size: 12px;
+}
+.cm-badge {
+  padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px;
+  line-height: 16px;
+}
+.cm-ok { color: #047857; border-color: rgba(4, 120, 87, .4); }
+.cm-warn { color: #b45309; border-color: rgba(180, 83, 9, .4); }
+@media (prefers-color-scheme: dark) {
+  .cm-ok { color: #6ee7b7; border-color: rgba(110, 231, 183, .4); }
+  .cm-warn { color: #fbbf24; border-color: rgba(251, 191, 36, .4); }
+}
+.cm-empty { margin: 0; padding: 16px 10px; color: var(--muted); }
+
+/* Phones: the panel is a bottom sheet over the page, the popover sits at the bottom. */
+@media (max-width: 600px) {
+  body.cm-side-open .stage { right: 0; }
+  .cm-side {
+    top: auto; left: 0; width: auto; height: min(65vh, 520px); border-left: 0;
+    border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; box-shadow: var(--shadow);
+  }
+  .cm-pop {
+    left: 8px !important; right: 8px; top: auto !important; bottom: 8px; width: auto;
+    max-height: 60vh;
+  }
+  .cm-count { display: none; }
+  .cm-toggle:has(.cm-count:not([hidden]))::after {
+    content: ""; position: absolute; top: 5px; right: 4px; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--accent);
+  }
+}

@@ -1,10 +1,12 @@
+import json
 from datetime import UTC, datetime
 
 import pytest
+from helpers import TEAM as TEAM_VIEWER
 from helpers import request
 
 from ontic_pages.cli import main
-from ontic_pages.info import github_url, short
+from ontic_pages.info import commit_url, github_url, short
 from ontic_pages.publish import publish
 from ontic_pages.store import Store
 
@@ -17,6 +19,7 @@ GIT = {
     "dirty": True,
 }
 LONG = "A very long description that goes on and on about depth estimation results"
+OUTSIDER = "someone@gmail.com"
 
 
 def test_github_url():
@@ -29,6 +32,17 @@ def test_github_url():
         assert github_url(remote) == "https://github.com/onticlabs/x"
     assert github_url("https://gitlab.com/a/b") is None
     assert github_url(None) is None
+
+
+def test_commit_url():
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    for remote in ("git@github.com:onticlabs/x.git", "https://github.com/onticlabs/x.git"):
+        link = commit_url({"remote": remote, "commit": sha})
+        assert link == f"https://github.com/onticlabs/x/commit/{sha}"
+    assert commit_url({"remote": "https://gitlab.com/a/b.git", "commit": sha}) is None
+    assert commit_url({"remote": "git@github.com:a/b.git", "commit": "nope<>"}) is None
+    assert commit_url({"remote": None, "commit": sha}) is None
+    assert commit_url(None) is None
 
 
 def test_short():
@@ -75,6 +89,69 @@ def test_info_page(store, site, monkeypatch, serve):
     assert "<tr class=current><td>20261007T153000Z (current)</td>" in text
     assert f'<span title="{LONG}">{LONG[:59].rstrip()}…</span>' in text
     assert '<a href="/report/_info">info</a>' in listing
+
+
+def details_of(srv, path, who=TEAM_VIEWER, headers=None):
+    status, _, body = request(srv, path, who=who, headers=headers)
+    return status, json.loads(body)
+
+
+def test_details_api(store, site, monkeypatch, serve):
+    first = publish_two(store, site, monkeypatch)["version"]
+    second = store.versions("report")[-1]
+    srv = serve()
+    status, d = details_of(srv, f"/_api/pages/report/versions/{first}")
+    assert status == 200
+    assert d == {
+        "name": "report", "version": first, "current": first, "visibility": "ontic",
+        "published_at": "2026-10-07T15:30:00+00:00", "published_by": d["published_by"],
+        "description": "first <i>try</i>", "meta": {"seed": "7"}, "files": 6,
+        "git": {
+            **GIT,
+            "repo_url": "https://github.com/onticlabs/experiments",
+            "commit_url": f"https://github.com/onticlabs/experiments/commit/{GIT['commit']}",
+        },
+    }  # fmt: skip
+    # An old version: its own fields; empty ones are left out.
+    status, d = details_of(srv, f"/_api/pages/report/versions/{second}")
+    assert (status, d["version"], d["current"], d["description"]) == (200, second, first, LONG)
+    assert "meta" not in d
+    assert details_of(srv, "/_api/pages/report/versions/20990101T000000Z")[0] == 404
+    assert details_of(srv, "/_api/pages/ghost/versions/20990101T000000Z")[0] == 404
+    # Signed in only, like /_info; and never for the page's own scripts.
+    store.set_visibility("report", "public")
+    assert details_of(srv, f"/_api/pages/report/versions/{first}", who=None)[0] == 401
+    assert details_of(srv, f"/_api/pages/report/versions/{first}", who=OUTSIDER)[0] == 200
+    cross = {"Sec-Fetch-Site": "same-site"}
+    assert details_of(srv, f"/_api/pages/report/versions/{first}", headers=cross)[0] == 403
+    store.set_visibility("report", "ontic")
+    assert details_of(srv, f"/_api/pages/report/versions/{first}", who=OUTSIDER)[0] == 403
+    store.set_visibility("report", "private")
+    assert details_of(srv, f"/_api/pages/report/versions/{first}", who=TEAM_VIEWER)[0] == 403
+
+
+def test_details_links(store, site, monkeypatch, serve):
+    sha = "89abcdef" * 5
+    remotes = {
+        "ssh": ("git@github.com:onticlabs/x.git", "https://github.com/onticlabs/x"),
+        "https": ("https://github.com/onticlabs/x", "https://github.com/onticlabs/x"),
+        "gitlab": ("https://gitlab.com/onticlabs/x.git", None),
+    }
+    versions = {}
+    for i, (key, (remote, _)) in enumerate(remotes.items()):
+        git = {"remote": remote, "branch": "b", "commit": sha, "dirty": False}
+        monkeypatch.setattr("ontic_pages.publish.git_provenance", lambda cwd, git=git: git)
+        page = publish(store, site, key, now=datetime(2026, 10, 7, 10, i, tzinfo=UTC))
+        versions[key] = page["version"]
+    edited = publish(store, site, "edited", meta={"edited_from": "20261001T000000Z"}, now=T1)
+    srv = serve()
+    for key, (remote, repo) in remotes.items():
+        git = details_of(srv, f"/_api/pages/{key}/versions/{versions[key]}")[1]["git"]
+        assert (git["remote"], git["repo_url"]) == (remote, repo)
+        assert git["commit_url"] == (f"{repo}/commit/{sha}" if repo else None)
+        assert git["dirty"] is False
+    d = details_of(srv, f"/_api/pages/edited/versions/{edited['version']}")[1]
+    assert d["meta"] == {"edited_from": "20261001T000000Z"}
 
 
 def test_info_command(cli_env, site, monkeypatch, capsys):

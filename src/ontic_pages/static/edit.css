@@ -1,0 +1,29 @@
+/* Edit text in place (edit.js): served as part of bar.css, after it. Nothing shows until a text
+   in the page changed: then the counter, Save and Discard. */
+.edit-pop { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; }
+.edit-tools { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.edit-save, .edit-discard, .edit-keep, .edit-really {
+  height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px;
+  background: none; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.edit-discard:hover, .edit-keep:hover, .edit-really:hover { background: var(--hover); }
+.edit-save, .edit-save:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.edit-really { color: var(--danger); }
+.edit-save:disabled, .edit-discard:disabled { opacity: .6; cursor: default; }
+.edit-count {
+  font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted);
+  cursor: help;
+}
+.edit-done { font-size: 13px; color: var(--muted); }
+.edit-panel { width: 300px; }
+.edit-panel .error { padding-top: 0; }
+.edit-confirm { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.edit-confirm p { grid-column: 1 / -1; }
+.edit-confirm .edit-keep { justify-self: end; }
+body.editing .bar { box-shadow: inset 0 -2px 0 var(--accent); }
+@media (prefers-color-scheme: dark) {
+  .edit-save, .edit-save:hover { color: #111; }
+}
+@media (max-width: 600px) {
+  .edit-save, .edit-discard { padding: 0 8px; }
+}

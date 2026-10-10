@@ -2,10 +2,12 @@
 
 Simple HTML hosting for the Ontic Labs team. Publish a folder or one HTML file
 under a name, and it is served at `https://pages.onticlabs.io/<name>/`, inside a
-slim bar (title menu with the versions, Share panel), from its own host
+slim bar (title menu with the versions, comments, Share panel), from its own host
 `https://<name>.pages.onticlabs.io/`. Each page is private (only you), ontic (the
 signed-in team, the default) or public (anyone with the link). Each publish is a
-new version; nothing is ever deleted.
+new version; nothing is ever deleted. The owner can also fix text right on the
+page in the browser (no Edit button: it is always on for them); Save writes that as a new
+version too.
 
 The only "provenance" is metadata: who published, when, an optional
 description, any `--meta key=value` you pass (for example `model=sha256:...`), and
@@ -63,16 +65,71 @@ ontic-pages info depth-eval          # everything page.json says, plus the versi
 ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
 ontic-pages share depth-eval public  # private, ontic or public
 ontic-pages url depth-eval           # its URL
+ontic-pages pull depth-eval ./current   # download the current version (--version for another)
 ```
+
+### Comments
+
+Signed-in viewers comment on a page in the bar: each thread is attached to an element of the
+page (a paragraph, a heading, a figure, a table cell), with replies, resolve and reopen. The command line reads and answers them, so an agent can work through the feedback
+before it publishes the next version:
+
+```sh
+ontic-pages comments depth-eval          # the open threads: short id, where, every comment
+ontic-pages comments depth-eval --all    # resolved ones too (--json: everything as JSON)
+ontic-pages comment depth-eval 3f9a1c "Fixed in the new version"   # reply; - reads stdin
+ontic-pages resolve depth-eval 3f9a1c    # or --reopen
+```
+
+A thread id may be shortened to its first characters (at least 4) while it stays unique. Anyone
+who may open a page and is signed in may read and add comments; signed out, even on a public
+page, there are none. Only its author deletes a comment, and it stays as "deleted". Comments
+always go through the gateway (never `--direct`); when the gateway says too many changes (20 a
+minute), these commands wait and try again.
 
 Anyone with an `@onticlabs.io` account may create a page; only its owner (the publisher of the
 current version) may publish a new version of it, `share` it or `set-current`. A publish uploads
 up to 8 files at a time (each retried twice), at most 5000 files and 5 GB per version; nothing
 becomes visible until every file is in the bucket with the size announced.
 
+`pull` writes every file of a version but `page.json` into a new or empty folder (default
+`./<name>`), downloaded straight from the bucket with short-lived URLs the gateway hands out. Use
+it to see what is published now, for example after someone fixed text in the browser.
+
+### Edit text in place
+
+The owner of a page, looking at its current version in the bar, can fix its text right there:
+there is no Edit button, editing is always on for them. Every element that holds nothing but
+text (paragraphs, headings, list items, table cells, captions, ...) can be clicked into and typed
+over, with a text cursor and a light outline only while the pointer or the focus is on it.
+Interactive elements are never editable, nor anything inside them (links, buttons, `summary`,
+labels, form fields, elements with a `role` such as button or link, `onclick`, a `tabindex` (a
+container's `tabindex="-1"` aside), a pointer cursor, or the page's own `contenteditable`), so
+links, buttons and app controls work as usual. A text counts as changed only once someone typed in it, so text the page's own scripts
+update is never counted. Non-owners, and older versions, get nothing editable.
+
+The bar shows nothing about editing until a text changed; then "N changes", Save and Discard
+(its tooltip: "Text only. Saved as a new version; older versions stay in the title menu.").
+Discard asks first, in the bar. Cmd+S or Ctrl+S, in the page or the bar, saves; Escape in an
+edited text leaves it. Closing or reloading the tab with unsaved changes asks first. Comment mode
+pauses editing (a click makes a comment) and leaving it resumes. Save writes a new version and
+the page fades over to it; while there are unsaved changes, a version published meanwhile waits
+until they are saved or discarded.
+
+The gateway finds each changed text in the HTML file's source (its text only, not tags, scripts,
+styles or the title; as written or with `&amp;`-style references) and replaces just the changed
+part, escaped. Each text must be there exactly once (a text that fills a whole element wins over
+the same words inside a longer one); if any change cannot be placed (written by a script, or
+there several times), nothing is saved and the bar says which. A save on a version that is no
+longer current (published meanwhile) is refused: reload and edit again. The new version copies
+every other file inside the bucket (server side), has the edited HTML file, and a `page.json`
+with you as `published_by`, the old description, git and meta, plus `edited_from=<the version
+you edited>` in meta. So before publishing a page again from its source, check
+`ontic-pages info <name>` for `edited_from` and carry those edits over (`pull` it and compare).
+
 ### Without the gateway: `--direct`
 
-Admins with a bucket key can skip the gateway: `publish`, `list`, `info`, `share` and
+Admins with a bucket key can skip the gateway: `publish`, `list`, `info`, `pull`, `share` and
 `set-current` take `--direct` (or set `ONTIC_PAGES_DIRECT=1`) and then read and write the bucket
 with your own key. `published_by` is then `ONTIC_PAGES_EMAIL`, else git `user.email`, and the
 owner rules above are not checked. The key goes in the config below.
@@ -173,10 +230,18 @@ even for public pages.
 
     <name>/current                 the current version id
     <name>/visibility              private, ontic or public (absent means ontic)
+    <name>/comments.json           the comment threads, written by the gateway only
     <name>/<version>/page.json     the metadata
     <name>/<version>/...           the files
 
 at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
+
+`comments.json` is `{"threads": [...]}`; a thread has `id`, `version` (the one it was made on),
+`anchor` (where on the page: path, a CSS selector, the point within that element, a snippet of
+its text, document x, y and, on newer threads, the element's tag name), `created_by`, `created_at`, `resolved_at`, `resolved_by` and
+`comments` (`id`, `author`, `body`, `created_at`, `deleted`). The gateway reads and rewrites the
+whole file under a lock per page and keeps it in memory for a few seconds; the bucket keeps the
+old copies. A deleted comment keeps its place with an empty body.
 
 ### page.json
 
@@ -187,7 +252,7 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
 | `published_at` | the same time in ISO 8601 |
 | `published_by` | the signed-in email (with `--direct`: `ONTIC_PAGES_EMAIL`, else git `user.email`, else `$USER`) |
 | `description` | from `--description`, may be empty |
-| `meta` | map of strings from `--meta key=value` |
+| `meta` | map of strings from `--meta key=value`; a version saved from text edited in the bar adds `edited_from` (the version it was edited from) |
 | `git` | `{remote, branch, commit, dirty}` of the directory you published from, or null outside a git repo |
 | `files` | how many files the version has |
 
@@ -202,9 +267,13 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
   `/<name>/<path>` is the bar around a frame showing `<path>` of the page, and
   `/<name>/_v/<version>/<path>` the same for one version; `/<name>/_info` is a plain
   page with what page.json says and every version; `/_api/pages/<name>` gives the
-  page facts as JSON, and `POST /_api/pages/<name>/visibility` changes visibility
-  (owner only, from the bar or the command line). The command line uses the rest of `/_api/`
-  (list, info, current, publish) and `/_cli/login`; see `gateway.py` for the routes.
+  page facts as JSON, `/_api/pages/<name>/versions/<version>` one version's details for the
+  bar's Details panel (signed in), and `POST /_api/pages/<name>/visibility` changes visibility
+  (owner only, from the bar or the command line); `POST /_api/pages/<name>/edits` saves text
+  edited in the bar (owner only). `/_api/pages/<name>/comments` reads the comment threads and
+  takes new ones, replies, resolve and delete (signed in, from the bar or the command line). The
+  command line uses the rest of `/_api/` (list, info, current, publish, files for `pull`) and
+  `/_cli/login`; see `gateway.py` for the routes.
 - **The page's own host** (`<name>.pages.onticlabs.io`): `/<path>` serves the
   current version's files (content types, `index.html` for folders, Range requests
   for video, ETags and 304s), `/_v/<version>/<path>` a given version, cached for a
@@ -212,10 +281,35 @@ at the root of the `ontic-pages` bucket, or under `ONTIC_PAGES_PREFIX` when set.
   without the bar.
 
 The bar: the home link, the title menu (who published, when, the description, the
-versions, Copy link, Open without the bar, Page info, All pages), an "old version"
-marker, your initial (or Sign in), and Share (owner, general access, Copy link).
-Escape or a click elsewhere, in the page too, closes a menu. The page fades in once
-it is ready, a spinner shows only when it takes a while, and when a new version is
+versions, Copy link, Open without the bar, Details, All pages), an "old version"
+marker, the info button (Details), the comment button (signed in only), the edit counter with
+Save and Discard (the owner, only once a text changed; see Edit text in place), your initial (or
+Sign in), and Share (owner, general access, Copy link). Escape or a click elsewhere, in the page
+too, closes a menu.
+
+The info button (an "i" in a circle, left of the comment button) and the title menu's Details
+item open the Details panel about the version you are looking at (the current one or an old
+one): the description, who published it and when, the version id, visibility, git (remote,
+branch, commit, linked to GitHub for a github.com remote, and a marker for uncommitted changes),
+"Edited in the browser from" with a link to that version, the file count and every `--meta`
+pair. Values can be copied; only http(s) values become links. Escape closes it and puts focus
+back on the info button. It needs sign-in, like `/<name>/_info`, which stays as the plain page
+behind its "Open as a page" link; signed out, the panel says so.
+
+Comments: the comment button turns on comment mode and shows how many threads are open; its
+menu has Show all comments (a side panel, a bottom sheet on phones) and Show resolved. In
+comment mode the element under the pointer gets an outline (with its corners) and a small label
+naming it (tag and the start of its text); the document itself and wrappers covering most of the
+view are skipped, small inline elements count. A click attaches a new thread to that element
+and opens the composer next to it, the element still outlined. Pins sit where each thread
+points within its element and follow it while the page scrolls, resizes or changes; a pin whose
+element is gone (or whose text changed) falls back to its old position only on the version it
+was made on, else the thread is listed in the panel only. Opening a thread (its pin, its card in
+the panel, or a `#comment=<id>` link) outlines its element and brings it into view; the pointer
+on a pin or a card outlines it too, and each card names its element. A pin opens the thread: Resolve or Reopen, Copy link (`#comment=<id>` opens it), delete your own
+comment, reply (Enter sends, Shift+Enter is a new line). The bar refreshes them every 30
+seconds while visible. The page itself never sees comment text or emails, only the pins and
+which one to outline. The page fades in once it is ready, a spinner shows only when it takes a while, and when a new version is
 published while you look, it fades in where you were. The gateway adds one small
 script (the bridge) to a page's HTML when it is shown in the bar, and only then;
 stored files are never changed. A plain click on a link to `https://pages.onticlabs.io/...`
@@ -256,8 +350,9 @@ store: provenance was recorded and checked, versions were chained jobs with
 `rollback`, `--from` inputs were linked to jobs, and there were a Share panel,
 a viewer frame, pinned comments on the page, a subdomain per page
 (`<job-id>.pages.onticlabs.io`), a verified disk cache and a landing page fed
-by announcements. The bar, the Share panel (three levels) and a host per page (by
-name) are back; comments are not yet. `set-current` replaces rollback. That code lives on the
+by announcements. The bar, the Share panel (three levels), a host per page (by
+name) and pinned comments (now in the bucket, not a database on the box) are back.
+`set-current` replaces rollback. That code lives on the
 ontic-cli branch `main-with-pages-and-viewer`.
 
 `scripts/migrate_old_pages.py` copies the old pages from the old jobs in `ontic-r3`

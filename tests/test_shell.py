@@ -47,6 +47,17 @@ def test_shell(serve, two):
     assert 'referrerpolicy="no-referrer"' in text
     assert f'href="https://report.{APEX}/docs/?x=1&amp;raw=1"' in text  # open without the bar
     assert '<a class="old" id="old" href="/report/" hidden' in text
+    # The info button, left of the comments, opens the Details panel; the title menu's Details
+    # item opens the same panel; /_info stays as the plain page behind it.
+    assert 'id="m-details" aria-controls="info-panel">Details</button>' in text
+    assert 'id="info-btn" type="button" aria-haspopup="dialog" aria-expanded="false" ' in text
+    assert text.index('id="info-btn"') < text.index('id="cm-btn"')
+    assert 'id="info-panel" role="dialog" aria-labelledby="d-title" hidden' in text
+    assert '<a class="d-open" id="d-open" href="/report/_info">Open as a page</a>' in text
+    menu = text[text.index('id="title-menu"') : text.index('id="old"')]
+    assert "m-details" in menu and "d-view" not in text and "d-title" not in menu
+    assert "d-back" not in text
+    assert "Page info" not in text
     data = facts(body)
     assert data["view"] == {
         "version": None,

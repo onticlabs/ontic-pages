@@ -1,6 +1,6 @@
 # ontic-pages: agent notes
 
-Simple HTML hosting for the team: `ontic-pages login|publish|list|info|share|set-current|url|gateway`.
+Simple HTML hosting for the team: `ontic-pages login|publish|list|info|pull|share|set-current|url|comments|comment|resolve|gateway`.
 The commands talk to the gateway with a token from `login`; `--direct` uses a bucket key instead.
 See README.md for what it does and deploy/README.md for how it is hosted.
 
@@ -12,6 +12,11 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   version (page.json, visibility, current); shared by `--direct` and the gateway's commit.
 - `src/ontic_pages/uploads.py`: publishing through the gateway, its side: checks the file list,
   picks the version, presigned PUT URLs, the size check and the commit.
+- `src/ontic_pages/edits.py`: text edited in the bar, the gateway's side: finds each changed text
+  in the HTML source (exactly once, else nothing is saved), and writes a new version (server-side
+  copies of the other files, the patched file, page.json with `edited_from`).
+- `src/ontic_pages/pull.py`: `ontic-pages pull`: the gateway's presigned GET URLs for a version's
+  files, and downloading them into a folder.
 - `src/ontic_pages/tokens.py`: the command line's tokens (HMAC signed, 30 days) and the login
   codes of the browser hand-off. In memory only.
 - `src/ontic_pages/remote.py`: the command line's side of the gateway: the token file, JSON
@@ -26,18 +31,37 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files, page state).
+- `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
+  gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment
+  text and anchors; deleted comments stay as tombstones.
+- `src/ontic_pages/comments_cli.py`: the `comments`, `comment` and `resolve` commands (always
+  through the gateway; short thread ids; waits when rate limited).
 - `src/ontic_pages/shell.py` and `src/ontic_pages/static/`: the bar (shell HTML, bar.js,
   bar.css), the bridge script added to framed HTML, and the command line's login page
-  (login.js). Static files are package data, served
-  at content-hashed URLs. User text goes into the bar with textContent, never innerHTML.
+  (login.js). Static files are package data, served at content-hashed URLs. User text goes into
+  the bar with textContent, never innerHTML. A feature in files of its own is served as part of
+  these or next to them (`shell.BUNDLES`):
+  - Details (the info button's panel, also opened from the title menu, with one version's
+    page.json, asked from
+    `/_api/pages/<name>/versions/<version>` when opened): `details.js` (after bar.js, hooked in
+    through `window.onticBar`) and `details.css` (after bar.css).
+  - comments: `comments.js` and `comments.css` in the bar, `pins.js` after bridge.js (the pins,
+    the hover outline in comment mode, the outline of the open or hovered thread's element). The
+    page in the frame never gets comment text or emails, only pins and `highlight {id}`.
+  - edit text in place, always on for the owner (no Edit button): `edit.js` (after bar.js,
+    hooked in through `window.onticBar`), `edit.css` (after bar.css) and `edit-bridge.js`
+    (after bridge.js; it also hears `comment-mode` and pauses editing then). Its bridge
+    messages: `edit-mode` (on/off, `discard`, `save`), `edit-state` (the count, `save` for
+    Cmd/Ctrl+S), `edits`.
 - `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
   (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
   Edit the skill text there, never in an installed copy.
 - `src/ontic_pages/cli.py`: argparse commands.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
-  `helpers.upload_server` takes its presigned PUTs). `test_js.py` runs bridge.js and bar.js in
-  node (skipped without node).
+  `helpers.upload_server` takes its presigned PUTs and answers its GETs). `test_js.py` runs
+  bridge.js and bar.js in node, `test_comments_js.py` pins.js and comments.js, and
+  `test_edit_js.py` the served edit mode, `test_details_js.py` the Details panel, each with a small fake DOM (all skipped without node).
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules

@@ -10,12 +10,21 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /public/<name>/<path>          old links: redirects to /<name>/<path>
     GET  /_api/pages/<name>             the page facts this viewer may see, as JSON
     GET  /_api/pages/<name>/info        every version's page.json (signed in)
+    GET  /_api/pages/<name>/versions/<version>   one version's details for the bar's Details
+                                        panel (signed in, from the bar or the command line)
+    GET  /_api/pages/<name>/files       a version's files with presigned GET URLs (pull.py)
     GET  /_api/pages                    the pages this viewer may open (signed in)
     GET  /_api/me                       who is asking
     POST /_api/pages/<name>/visibility  {"visibility": ...}, by the owner only
     POST /_api/pages/<name>/current     {"version": ...}, by the owner only
     POST /_api/pages/<name>/versions    publish: start (uploads.py); then .../<version>/files for
                                         more of the file list, and .../<version>/commit
+    GET  /_api/pages/<name>/comments    every comment thread (comments.py), signed in
+    POST /_api/pages/<name>/comments    {"anchor", "version", "body"}: a new thread; then
+                                        .../<thread>/reply {"body"}, .../<thread>/resolve
+                                        {"resolved"}, .../<thread>/<comment>/delete (its author)
+    POST /_api/pages/<name>/edits       {version, path, changes}: text edited in the bar, saved
+                                        as a new version, by the owner only (edits.py)
     GET  /_cli/login?code=              the command line's sign-in: Allow (tokens.py)
     POST /_api/cli/approve              {"code": ...}, from that page
     GET  /_api/cli/token?code=          the command line asks for its token
@@ -61,8 +70,12 @@ from .auth import (
     fixed,
 )
 from .cache import MB, FileCache, PageCache
+from .comments import Comments, listing
+from .comments import view as thread_view
 from .config import DEFAULT_URL
-from .info import DESCRIPTION_CHARS, NAME_CHARS, history, info_html, short
+from .edits import save as save_edits
+from .info import DESCRIPTION_CHARS, NAME_CHARS, details, history, info_html, short
+from .pull import presigned_files
 from .shell import Assets, inject, login_html, shell_csp, shell_html
 from .store import (
     NAME_RE,
@@ -81,13 +94,21 @@ YEAR = "max-age=31536000, immutable"
 VERSIONED = re.compile(r"^_v/(\d{8}T\d{6}Z)(/.*)?$")
 API_PAGE = re.compile(r"^/_api/pages/([^/]+)$")
 API_INFO = re.compile(r"^/_api/pages/([^/]+)/info$")
+API_FILES = re.compile(r"^/_api/pages/([^/]+)/files$")
+API_VERSION = re.compile(r"^/_api/pages/([^/]+)/versions/(\d{8}T\d{6}Z)$")
 API_WRITE = re.compile(
-    r"^/_api/pages/([^/]+)/(visibility|current|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+    r"^/_api/pages/([^/]+)/"
+    r"(visibility|current|edits|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+)
+API_COMMENTS = re.compile(r"^/_api/pages/([^/]+)/comments$")
+COMMENT_WRITE = re.compile(
+    r"^/_api/pages/([^/]+)/comments(?:/([0-9a-f]{16})/(?:(reply|resolve)|([0-9a-f]{16})/delete))?$"
 )
 APPROVE = "/_api/cli/approve"
 SECRET_QUERY = re.compile(r"\b(code)=[^&\s]+")
 EXPIRED = "not signed in, or the sign-in expired: run ontic-pages login"
 SMALL_BODY, LIST_BODY = 4096, 64 * 1024  # Caddy refuses anything over 64 KB anyway
+COMMENT_BODY = 32 * 1024  # 4000 characters of text, as UTF-8 and JSON, and the anchor
 LOGIN_CSP = (
     "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
@@ -161,6 +182,7 @@ class Gateway:
         self.token_secret = check_secret(token_secret) if token_secret else ""
         self.codes = LoginCodes()
         self.uploads = Uploads(store)
+        self.comments = Comments(store, ttl)
 
     def visible(self, email: str):
         """(name, current, visibility, owner, page.json) of each page this viewer may open."""
@@ -416,6 +438,12 @@ def make_handler(gw: Gateway):
                 return self.api_get(m.group(1))
             if m := API_INFO.match(path):
                 return self.api_info(m.group(1))
+            if m := API_COMMENTS.match(path):
+                return self.api_comments(m.group(1))
+            if m := API_FILES.match(path):
+                return self.api_files(m.group(1), query)
+            if m := API_VERSION.match(path):
+                return self.api_version(m.group(1), m.group(2))
             if path == "/_api/pages":
                 return self.api_list()
             if path == "/_api/me":
@@ -500,6 +528,35 @@ def make_handler(gw: Gateway):
                     "name": name, "current": current, "visibility": found[1], "versions": metas,
                 })  # fmt: skip
 
+        def api_version(self, name: str, version: str):
+            """One version's page.json fields for the bar's Details panel. Signed in only, like
+            /<name>/_info (the emails in it), and never for a page's own scripts."""
+            if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                return self.send_json(403, {"error": "details are read by the bar"})
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            if not found[3]:
+                return self.send_json(401, {"error": "sign in to see the details"})
+            if version not in gw.pages.versions(name):
+                return self.send_json(404, {"error": f"{name} has no version {version}"})
+            meta = gw.files.meta(name, version)
+            self.send_json(200, details(name, version, found[0], found[1], meta))
+
+        def api_files(self, name: str, query: str):
+            """A version's files (the current one by default) with presigned GET URLs, for
+            `ontic-pages pull`: the bytes come from the bucket, not through here. Signed in."""
+            if found := self.api_page(name, required=True):
+                if not found[3]:
+                    return self.send_json(401, {"error": EXPIRED})
+                version = parse_qs(query).get("version", [found[0]])[0]
+                if not VERSION_RE.match(version) or version not in gw.store.versions(name):
+                    return self.send_json(404, {"error": f"{name} has no version {version}"})
+                self.send_json(200, {
+                    "name": name, "version": version, "page": gw.store.meta(name, version),
+                    "files": presigned_files(gw.store, name, version),
+                })  # fmt: skip
+
         def api_list(self):
             email = self.email()
             if not email:
@@ -516,6 +573,26 @@ def make_handler(gw: Gateway):
                 for name, version, visibility, owner, meta in gw.visible(email)
             ]
             self.send_json(200, {"pages": pages})
+
+        def api_comments(self, name: str):
+            """Every thread of the page, newest activity first, for a signed-in viewer who may
+            open it. Signed out (a public page) there are none; a page's own scripts get none."""
+            if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                return self.send_json(403, {"error": "comments are read by the bar"})
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            current, email = found[0], found[3]
+            if not email:
+                return self.send_json(401, {"error": "sign in to see comments"})
+            try:
+                threads = listing(gw.comments.threads(name), email)
+            except Refused as err:
+                return self.send_json(err.status, {"error": err.message})
+            self.send_json(200, {
+                "name": name, "current": current,
+                "open": sum(1 for t in threads if not t["resolved"]), "threads": threads,
+            })  # fmt: skip
 
         # --- the command line's sign-in (tokens.py) ----------------------------------------
 
@@ -561,16 +638,18 @@ def make_handler(gw: Gateway):
             host = (self.headers.get("Host") or "").lower()
             self.on_apex = host == site.apex
             m = API_WRITE.match(path)
+            c = COMMENT_WRITE.match(path)
             big = bool(m and m.group(2).startswith("versions") and m.group(4) != "commit")
+            big = big or bool(m and m.group(2) == "edits")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 length = -1
-            if not 0 <= length <= (LIST_BODY if big else SMALL_BODY):
+            if not 0 <= length <= (COMMENT_BODY if c else LIST_BODY if big else SMALL_BODY):
                 self.close_connection = True
                 return self.send_json(413, {"error": "body too large"})
             body = self.rfile.read(length)
-            if not self.on_apex or not (m or path == APPROVE):
+            if not self.on_apex or not (m or c or path == APPROVE):
                 return self.send_json(404 if self.on_apex else 405, {"error": "no writes here"})
             if self.token_refused():
                 return
@@ -591,6 +670,8 @@ def make_handler(gw: Gateway):
             except ValueError:
                 data = None
             try:
+                if c:
+                    return self.comment_write(c, data)
                 if path == APPROVE:
                     return self.approve(data)
                 name = m.group(1)
@@ -598,6 +679,8 @@ def make_handler(gw: Gateway):
                     return self.publish_start(name, data)
                 if m.group(3):
                     return self.publish_more(name, m.group(3), m.group(4), data)
+                if m.group(2) == "edits":
+                    return self.save_edits(name, data)
                 found = self.api_page(name, required=True)
                 if not found:
                     return
@@ -653,6 +736,37 @@ def make_handler(gw: Gateway):
                 return self.send_json(400, {"error": "this sign-in link is used up or too old"})
             self.send_json(200, {"email": email})
 
+        def comment_write(self, c, data):
+            """A new thread, a reply, resolve or reopen, or deleting one's own comment, by
+            anyone signed in who may open the page (comments.py checks the rest)."""
+            name, thread, action, comment = c.groups()
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            current, email = found[0], found[3]
+            if not email:
+                return self.send_json(401, {"error": EXPIRED})
+            if not gw.limit.allow(email.lower()):
+                return self.send_json(429, {"error": "too many changes, wait a minute"})
+            data = data if isinstance(data, dict) else {}
+            status, what = 200, action or ("delete" if comment else "new")
+            if thread is None:
+                version = data.get("version") or current
+                if not isinstance(version, str) or version not in gw.pages.versions(name):
+                    raise Refused(400, f"{name} has no such version")
+                anchor, text = data.get("anchor"), data.get("body")
+                done, status = gw.comments.create(name, version, anchor, email, text), 201
+            elif action == "reply":
+                done = gw.comments.reply(name, thread, email, data.get("body"))
+            elif action == "resolve":
+                if not isinstance(data.get("resolved"), bool):
+                    raise Refused(400, "resolved: true or false")
+                done = gw.comments.resolve(name, thread, data["resolved"], email)
+            else:
+                done = gw.comments.delete(name, thread, comment, email)
+            self.log_message("comment %s %s %s", what, name, done["id"])
+            self.send_json(status, {"thread": thread_view(done, email)})
+
         def may_publish(self, name: str) -> str:
             """The publisher's email: a team member for a new page, the owner for a new version
             of an existing one. Raises Refused otherwise."""
@@ -700,6 +814,24 @@ def make_handler(gw: Gateway):
                 "page": page, "visibility": gw.store.visibility(name),
                 "url": f"{site.origin}/{quote(name)}/",
             })  # fmt: skip
+
+        def save_edits(self, name: str, data):
+            """Text edited in the bar, as a new version (edits.py checks owner and version)."""
+            found = self.api_page(name, required=True)
+            if not found:
+                return
+            email = found[3]
+            if not email:
+                raise Refused(401, EXPIRED)
+            if email.strip().lower() != found[2].strip().lower():
+                raise Refused(403, "only the owner can edit this page")
+            if not gw.limit.allow(email.lower()):
+                raise Refused(429, "too many changes, wait a minute")
+            page = save_edits(gw.store, name, email, data, gw.uploads)
+            gw.pages.forget(name)
+            edited = page["meta"]["edited_from"]
+            self.log_message("edit %s %s from %s", name, page["version"], edited)
+            self.send_json(200, {"version": page["version"], "page": gw.facts(name, email)})
 
         # --- the content host ---------------------------------------------------------------
 

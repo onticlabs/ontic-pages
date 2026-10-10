@@ -96,6 +96,7 @@ class Uploads:
         self.store, self.seconds, self.cap = store, seconds, cap
         self.lock = threading.Lock()
         self.pending: dict[tuple[str, str], Pending] = {}
+        self.reserved: set[tuple[str, str]] = set()  # versions an edit is writing (edits.py)
 
     def _prune(self, now: float) -> None:
         for key in [k for k, p in self.pending.items() if now - p.started > self.seconds]:
@@ -111,11 +112,25 @@ class Uploads:
             self._prune(now)
             if len(self.pending) >= self.cap:
                 raise Refused(503, "too many publishes under way, try again in a few minutes")
-            taken = {v for (n, v) in self.pending if n == name}
-            version = new_version(self.store, name, taken=taken)
+            version = new_version(self.store, name, taken=self._taken(name))
             up = Pending(name, version, who, description, meta, git, visibility, now)
             self.pending[(name, version)] = up
         return up, self._add(up, files)
+
+    def _taken(self, name: str) -> set[str]:
+        """Versions promised to an upload or an edit that has not finished (under the lock)."""
+        return {v for (n, v) in [*self.pending, *self.reserved] if n == name}
+
+    def reserve(self, name: str) -> str:
+        """A new version id for a gateway-side write (a saved edit); release() it when done."""
+        with self.lock:
+            version = new_version(self.store, name, taken=self._taken(name))
+            self.reserved.add((name, version))
+        return version
+
+    def release(self, name: str, version: str) -> None:
+        with self.lock:
+            self.reserved.discard((name, version))
 
     def get(self, name: str, version: str, who: str) -> Pending:
         with self.lock:

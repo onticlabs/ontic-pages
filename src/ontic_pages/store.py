@@ -3,6 +3,7 @@ at the bucket root):
 
     <prefix><name>/current                   the current version id, as text
     <prefix><name>/visibility                private, ontic or public (absent means ontic)
+    <prefix><name>/comments.json             the comments, written by the gateway (comments.py)
     <prefix><name>/<version>/page.json       metadata of that version
     <prefix><name>/<version>/<files...>      the page itself
 
@@ -124,6 +125,18 @@ class Store:
             ExpiresIn=seconds,
         )
         return url, {"Content-Type": ctype}
+
+    def presign_get(self, key: str, seconds: int = 3600) -> str:
+        """A URL that lets its holder GET this one key for `seconds`."""
+        return self.client.generate_presigned_url(
+            "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=seconds
+        )
+
+    def copy(self, src: str, dst: str) -> None:
+        """A server-side copy within the bucket (the bytes stay in the store), with its type."""
+        self.client.copy_object(
+            Bucket=self.bucket, Key=dst, CopySource={"Bucket": self.bucket, "Key": src}
+        )
 
     def sizes(self, prefix: str) -> dict[str, int]:
         """Key (below prefix) -> size, for every object under prefix."""
