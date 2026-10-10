@@ -14,7 +14,8 @@
 // From the bar: edit-mode {on} turns editing on or off (the changes so far stay; while comment
 // mode is on, editing is suspended as well), {discard: true} first puts every original text
 // back, {on: false, save: true} answers edits {path, changes: [{before, after}]} and stops
-// editing, leaving the new text on screen until the saved version replaces this page. To the
+// editing, leaving the new text on screen; {on: true, saved: true} after the save makes that
+// text the original (the count goes to 0, nothing reloads) and editing goes on. To the
 // bar: edit-state {changes} whenever the count changes or editing starts, with save: true for
 // Cmd/Ctrl+S in the page.
 (function () {
@@ -211,6 +212,17 @@
     items = [];
   }
 
+  // Saved: the text on screen is the page's text now, and further edits count against it. A
+  // no-break space the browser typed is the plain one that was saved.
+  function rebase() {
+    items.forEach(function (it) {
+      var text = now(it);
+      if (it.el.textContent !== text) it.el.textContent = text;
+      it.before = text;
+      it.touched = false;
+    });
+  }
+
   window.addEventListener("message", function (event) {
     if (event.origin !== APEX || event.source !== window.parent) return;
     var message = event.data;
@@ -222,6 +234,7 @@
     }
     if (message.ontic !== "edit-mode") return;
     if (message.discard === true) discard();
+    if (message.saved === true) rebase();
     if (message.save === true) {
       send(edits());
       enabled = false;

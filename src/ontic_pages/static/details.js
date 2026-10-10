@@ -13,7 +13,9 @@
   var VERSION = /^\d{8}T\d{6}Z$/;
   var LINK = /^https?:\/\/[^\s]+$/i;
   var ACCESS = { private: "Private", ontic: "Team", public: "Public" };
-  var cache = {}; // version -> its details (answers only; a failure is asked again)
+  // version -> its details (answers only; a failure is asked again). Their `current` may be out
+  // of date after a save or a publish: the bar's facts say which version is current.
+  var cache = {};
   var showing = null; // the version the open panel shows
   var asked = 0; // only the latest request may draw
 
@@ -142,7 +144,7 @@
 
     dd = row("Version");
     dd.appendChild(el("code", "d-code", d.version));
-    if (d.version === d.current) dd.appendChild(el("span", "tag", "current"));
+    if (d.version === bar.page().current) dd.appendChild(el("span", "tag", "current"));
     dd.appendChild(copyButton(d.version, "version id"));
 
     if (d.visibility) row("Visibility").textContent = ACCESS[d.visibility] || text(d.visibility);

@@ -250,6 +250,15 @@ out.saved = [h1.textContent, editable(), h1.style.outline];
 // A refused save: editing resumes with the changes.
 out.resume = msg({ ontic: "edit-mode", on: true });
 out.resumed = editable();
+// A save that went through: what is on screen is the original now (a typed no-break space is
+// the plain one saved), nothing reloads, and editing goes on against the saved text.
+type(h1, "Title & more!");
+out.save2 = msg({ ontic: "edit-mode", on: false, save: true });
+out.rebased = msg({ ontic: "edit-mode", on: true, saved: true });
+out.afterSave = [h1.textContent, editable()];
+out.typedAgain = type(h1, "Title & more!!");
+out.save3 = msg({ ontic: "edit-mode", on: false, save: true });
+out.resume3 = msg({ ontic: "edit-mode", on: true });  // refused: the change is still there
 // Discard: every original text comes back; the page's own editor is left alone.
 out.discard = msg({ ontic: "edit-mode", on: true, discard: true });
 out.restored = [h1.textContent, editable(), own.getAttribute("contenteditable"),
@@ -294,11 +303,15 @@ function fetch(url, options) {
   fetches.push([url, options && options.method || "GET",
     options && options.body ? JSON.parse(options.body) : null]);
   const a = answers.shift();
-  return Promise.resolve({ ok: a.ok, status: a.status, json: () => Promise.resolve(a.body) });
+  const response = { ok: a.ok, status: a.status, json: () => Promise.resolve(a.body) };
+  return a.gate ? a.gate.then(() => response) : Promise.resolve(response);
 }
+const clock = { now: 1e12 };  // Date.now, moved on by hand (polls are 2 s apart at least)
+class FakeDate extends Date {}
+FakeDate.now = () => clock.now;
 const location = { origin: APEX, href: APEX + "/report/", hash: "", assign() {} };
 vm.runInNewContext(SOURCE, { window, document, location, history: { replaceState() {} }, URL,
-  fetch, JSON, Date, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0 });
+  fetch, JSON, Date: FakeDate, setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0 });
 fire(document, "DOMContentLoaded");
 const q = (cls) => body.querySelector("." + cls);
 function message(data, origin) {
@@ -319,7 +332,10 @@ const unload = () => fire(window, "beforeunload", {}).defaultPrevented;
   out.counter = [shown(), q("edit-count").textContent, q("edit-tools").title,
     body.classList.contains("editing"), unload()];
 
-  // Save: the page's changes go to the gateway, the new version fades in.
+  // Save while a poll is on its way (answered after the save, with the facts before it).
+  let release;
+  answers.push({ ok: true, status: 200, body: PAGE, gate: new Promise((r) => { release = r; }) });
+  fire(window, "focus");
   framePosts.length = 0;
   q("edit-save").click();
   out.saving = [framePosts.slice(), q("edit-count").textContent, q("edit-save").disabled];
@@ -329,17 +345,18 @@ const unload = () => fire(window, "beforeunload", {}).defaultPrevented;
   message({ ontic: "edits", path: "/", changes: [{ before: "a", after: "b" }] });
   out.twice = message({ ontic: "edits", path: "/", changes: [] }); // ignored while sending
   await tick(); await tick(); await tick();
-  out.fetch = fetches.slice();
-  out.saved = [shown(), q("edit-done").hidden, swaps];
-  // The new version's page is ready: it becomes the frame, and editing is on there too.
-  const next2 = stage.childNodes.find((n) => n !== frame && n.tagName === "IFRAME");
-  const nextPosts = [];
-  next2.contentWindow = { postMessage: (m, o) => nextPosts.push([m, o]) };
-  fire(window, "message", { data: { ontic: "ready" }, origin: CONTENT,
-    source: next2.contentWindow });
-  out.readyAgain = nextPosts.filter((m) => m[0].ontic === "edit-mode");
-  frame.contentWindow = next2.contentWindow;  // posts to the frame now go to the new one
-  next2.contentWindow.postMessage = (m, o) => framePosts.push([JSON.parse(JSON.stringify(m)), o]);
+  out.fetch = fetches.filter((f) => f[1] === "POST");
+  // Saved: the frame keeps the text it shows (no new frame); the bar takes v2 as current.
+  out.saved = [shown(), q("edit-done").hidden, swaps, window.onticBar.page().current,
+    framePosts.slice()];
+  release();
+  await tick(); await tick(); await tick();
+  out.stalePoll = [swaps, window.onticBar.page().current];  // the older facts are dropped
+  clock.now += 5000;
+  answers.push({ ok: true, status: 200, body: next });
+  fire(window, "focus");
+  await tick(); await tick();
+  out.samePoll = swaps;  // the poll brings v2: it is not loaded again
 
   // Cmd/Ctrl+S in the page: a refused save shows its error, and the page edits on.
   fetches.length = 0;
@@ -365,6 +382,7 @@ const unload = () => fire(window, "beforeunload", {}).defaultPrevented;
   // A version published meanwhile does not replace the page with changes.
   const before = swaps;
   answers.push({ ok: true, status: 200, body: Object.assign({}, next, { current: "v3" }) });
+  clock.now += 5000;
   fire(window, "focus");
   await tick(); await tick();
   out.held = swaps - before;
@@ -387,6 +405,19 @@ const unload = () => fire(window, "beforeunload", {}).defaultPrevented;
   // The page loaded again with changes in it: they are gone, and the bar says so.
   message({ ontic: "edit-state", changes: 2 });
   out.reload = [message({ ontic: "ready" }), shown(), q("error").textContent];
+
+  // A save answered with another version current (a publish raced it): that one fades in.
+  message({ ontic: "edit-state", changes: 1 });
+  q("edit-save").click();
+  const swapsBefore = swaps;
+  answers.push({ ok: true, status: 200,
+    body: { version: "v4", page: Object.assign({}, next, { current: "v5" }) } });
+  framePosts.length = 0;
+  fire(window, "message", { origin: CONTENT, source: frame.contentWindow,
+    data: { ontic: "edits", path: "/", changes: [{ before: "e", after: "f" }] } });
+  await tick(); await tick(); await tick();
+  out.raced = [swaps - swapsBefore, framePosts.slice(), window.onticBar.page().current,
+    q("edit-done").hidden];
   console.log(JSON.stringify(out));
 })();
 """
@@ -452,8 +483,19 @@ def test_bridge_comment_mode_save_and_discard():
     }, APEX]]  # fmt: skip
     assert out["saved"] == ["Title & more!", [], ""]  # the new text stays on screen
     assert out["resume"] == [state(1)] and out["resumed"] == ["h1:Title & more!"]
+    edits = lambda before, after: [[{  # noqa: E731
+        "ontic": "edits", "path": "/a/b.html", "changes": [{"before": before, "after": after}],
+    }, APEX]]  # fmt: skip
+    # Saved: the counter goes to 0 without a reload, and the next change diffs against it.
+    assert out["save2"] == edits("Title & more", "Title & more!")
+    assert out["rebased"] == [state(0)]
+    assert out["afterSave"] == ["Title & more!", ["h1:Title & more!"]]
+    assert out["typedAgain"] == [state(1)]
+    assert out["save3"] == edits("Title & more!", "Title & more!!")
+    assert out["resume3"] == [state(1)]
     assert out["discard"] == [state(0)]
-    assert out["restored"] == ["Title & more", [], "true", False]
+    # Discard puts back the text as last saved.
+    assert out["restored"] == ["Title & more!", [], "true", False]
     (message, origin), *_ = out["tooLong"]
     assert message["changes"] == [] and "too long" in message["error"]
 
@@ -476,8 +518,11 @@ def test_bar_edit_flow():
         {"version": "v1", "path": "/", "changes": [{"before": "a", "after": "b"}]},
     ]]  # fmt: skip
     assert out["twice"] == []
-    assert out["saved"] == [False, False, 1]  # Saved; the new version is loading in a frame
-    assert out["readyAgain"] == [[{"ontic": "edit-mode", "on": True}, CONTENT]]
+    # Saved, and no frame is loaded: the page's text becomes the original, editing goes on.
+    saved_post = [[{"ontic": "edit-mode", "on": True, "saved": True}, CONTENT]]
+    assert out["saved"] == [False, False, 0, "v2", saved_post]
+    assert out["stalePoll"] == [0, "v2"]  # facts asked before the save are dropped
+    assert out["samePoll"] == 0  # the saved version is never loaded again
     assert out["frameKey"] == [[{"ontic": "edit-mode", "on": False, "save": True}, CONTENT]]
     version, error, panel_hidden, posts, count = out["refused"]
     assert version == "v2" and error == "a newer version was published" and not panel_hidden
@@ -494,6 +539,8 @@ def test_bar_edit_flow():
     posts, still_shown, error = out["reload"]
     assert posts == [[{"ontic": "edit-mode", "on": True}, CONTENT]] and still_shown is False
     assert error == "The page reloaded; unsaved changes are gone."
+    # A publish made another version current during the save: that one fades in.
+    assert out["raced"] == [1, [], "v5", False]
 
 
 @pytest.mark.parametrize("role, viewing", [("viewer", None), ("owner", "v0")])

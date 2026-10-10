@@ -51,8 +51,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   - edit text in place, always on for the owner (no Edit button): `edit.js` (after bar.js,
     hooked in through `window.onticBar`), `edit.css` (after bar.css) and `edit-bridge.js`
     (after bridge.js; it also hears `comment-mode` and pauses editing then). Its bridge
-    messages: `edit-mode` (on/off, `discard`, `save`), `edit-state` (the count, `save` for
-    Cmd/Ctrl+S), `edits`.
+    messages: `edit-mode` (on/off, `discard`, `save`, `saved`: the text on screen is the saved
+    original now, no reload), `edit-state` (the count, `save` for Cmd/Ctrl+S), `edits`.
 - `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
   (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
   Edit the skill text there, never in an installed copy.

@@ -213,3 +213,12 @@ def test_panel_empty_and_signed_out():
 def test_panel_never_uses_html():
     source = served("bar.js")
     assert "innerHTML" not in source and "insertAdjacentHTML" not in source
+
+
+def test_current_tag_follows_the_bar():
+    # A kept answer may name an older current version (a save or a publish made another one
+    # current since): the tag follows the bar's facts.
+    out = panel({**FULL, "version": CURRENT, "current": OLD, "meta": {}})
+    assert f"dd: {CURRENT}current{{copy}}" in out["panel"]
+    out = panel({**FULL, "current": OLD}, viewing=OLD)
+    assert f"dd: {OLD}{{copy}}" in out["panel"]

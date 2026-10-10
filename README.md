@@ -113,8 +113,11 @@ The bar shows nothing about editing until a text changed; then "N changes", Save
 (its tooltip: "Text only. Saved as a new version; older versions stay in the title menu.").
 Discard asks first, in the bar. Cmd+S or Ctrl+S, in the page or the bar, saves; Escape in an
 edited text leaves it. Closing or reloading the tab with unsaved changes asks first. Comment mode
-pauses editing (a click makes a comment) and leaving it resumes. Save writes a new version and
-the page fades over to it; while there are unsaved changes, a version published meanwhile waits
+pauses editing (a click makes a comment) and leaving it resumes. Save shows "Saving..." at once
+and "Saved" once the gateway wrote the new version and made it current. The page is not loaded
+again (it shows that text already): the bar takes the new version as current and editing goes
+on from the saved text. Should a publish have made another version current during the save,
+that one fades in instead. While there are unsaved changes, a version published meanwhile waits
 until they are saved or discarded.
 
 The gateway finds each changed text in the HTML file's source (its text only, not tags, scripts,

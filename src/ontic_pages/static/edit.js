@@ -3,9 +3,10 @@
 // tells it so (edit-mode), and the page makes its texts editable (edit-bridge.js). The bar shows
 // nothing about it until a text changed; then "N changes", Save and Discard (Discard asks here
 // first). Cmd/Ctrl+S, here or in the page, saves. Save collects the changes from the page and
-// sends them to the gateway, which writes a new version (edits.py); the bar's live update fades
-// it in. While there are unsaved changes a newly published version waits, and leaving the tab
-// asks first. Comment mode suspends editing in the page itself (it hears comment-mode too).
+// sends them to the gateway, which writes a new version (edits.py) and makes it current; the
+// frame shows that text already, so it stays (edit-mode {saved: true} makes it the page's new
+// original text) and only the bar's facts change. While there are unsaved changes a newly
+// published version waits, and leaving the tab asks first. Comment mode suspends editing in the page itself (it hears comment-mode too).
 // To the frame: edit-mode. From it: edit-state and edits. Everything shown is set with
 // textContent.
 (function () {
@@ -127,14 +128,25 @@
     show(error, false);
   }
 
-  function saved(next) {
+  // The gateway wrote the new version (answer: {version, page}). The frame shows its text
+  // already, so it is not loaded again: the bar takes it as current, and the page's texts as
+  // they are now become the originals that further edits are counted against. Should a publish
+  // have made another version current meanwhile, that one fades in instead.
+  function saved(answer) {
+    var next = answer.page;
     state = "idle";
     changes = 0;
     show("", false);
     ui.done.hidden = false;
     draw();
     setTimeout(function () { ui.done.hidden = true; draw(); }, 2500);
-    bar.update(next); // the new current version fades in
+    bar.adopt(next);
+    if (next.current === answer.version && !bar.view.version) {
+      version = answer.version;
+      post({ ontic: "edit-mode", on: true, saved: true });
+    } else {
+      settled();
+    }
   }
 
   function send(message) {
@@ -161,7 +173,8 @@
     }).then(function (response) {
       return response.json().then(function (body) { return { ok: response.ok, body: body }; });
     }).then(function (result) {
-      if (result.ok && result.body && result.body.page) saved(result.body.page);
+      var body = result.body;
+      if (result.ok && body && body.page && typeof body.version === "string") saved(body);
       else failed((result.body && result.body.error) || "Could not save.");
     }, function () {
       failed("Could not reach the server; try Save again.");
