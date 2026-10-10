@@ -375,6 +375,51 @@ def test_save_with_a_cache_behind(store, site, page):
     assert err.value.status == 409
 
 
+def test_access_change_during_the_save_is_kept(store, s3, page, monkeypatch):
+    # The page is made private while the files are written: the save must not put back the
+    # visibility it read before (signed-out viewers would see the page until it expired).
+    files, pages = caches(store)
+    store.set_visibility("report", "public")
+    warm(files, pages, page)
+    real = store.put
+
+    def put(key, data):
+        if key.endswith("/index.html"):
+            store.set_visibility("report", "private")  # as the gateway's visibility route does
+            pages.forget("report")
+        return real(key, data)
+
+    monkeypatch.setattr(store, "put", put)
+    edit = body(page, change("Results", "Findings"))
+    new = save(store, "report", OWNER, edit, None, files, pages)
+    assert pages.get("report") == (new["version"], "private", OWNER)
+
+
+def test_page_state_read_before_a_change_is_not_kept(store, page, monkeypatch):
+    files, pages = caches(store)
+    real = store.visibility
+
+    def visibility(name):  # another request makes the page private during this read
+        level = real(name)
+        store.set_visibility(name, "private")
+        pages.forget(name)
+        return level
+
+    monkeypatch.setattr(store, "visibility", visibility)
+    assert pages.get("report")[1] == "ontic"  # what it read
+    monkeypatch.setattr(store, "visibility", real)
+    assert pages.get("report")[1] == "private"  # not kept: read again
+
+
+def test_saved_state_is_as_old_as_its_snapshot(store, page):
+    files, pages = caches(store)
+    warm(files, pages, page)
+    read_at = pages.entries["report"][0]
+    edit = body(page, change("Results", "Findings"))
+    new = save(store, "report", OWNER, edit, None, files, pages)
+    assert pages.entries["report"] == (read_at, (new["version"], "ontic", OWNER))
+
+
 def test_publish_during_the_save_wins(store, site, s3, page, monkeypatch):
     files, pages = caches(store)
     warm(files, pages, page)

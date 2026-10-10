@@ -139,52 +139,84 @@ class FileCache:
 class PageCache:
     """(current version, visibility, owner) and the versions of each page, kept for `ttl`
     seconds so a page with many assets costs one lookup. The owner is the current version's
-    published_by."""
+    published_by.
+
+    Every change the gateway makes to a page (visibility, current, a publish) ends with
+    forget(), which also counts up the page's generation. A value read before a forget is never
+    kept after it: get() keeps what it read only when the generation did not move meanwhile, and
+    put() (a saved edit) only when it is still the generation of the snapshot it started from."""
 
     def __init__(self, store: Store, files: FileCache, ttl: float):
         self.store, self.files, self.ttl = store, files, ttl
         self.lock = threading.Lock()
         self.entries: dict[str, tuple[float, tuple]] = {}
         self.lists: dict[str, tuple[float, list[str]]] = {}
+        self.generations: dict[str, int] = {}
 
     def get(self, name: str) -> tuple[str | None, str, str]:
+        return self.snapshot(name)[2]
+
+    def snapshot(self, name: str) -> tuple[int, float, tuple[str | None, str, str]]:
+        """(generation, when the value was read, (current, visibility, owner))."""
         now = time.monotonic()
         with self.lock:
             hit = self.entries.get(name)
+            generation = self.generations.get(name, 0)
         if hit and now - hit[0] < self.ttl:
-            return hit[1]
+            return generation, hit[0], hit[1]
         version = self.store.current(name)
         visibility = self.store.visibility(name)
         owner = self.files.meta(name, version).get("published_by", "") if version else ""
         value = (version, visibility, owner)
         with self.lock:
-            self.entries[name] = (now, value)
-        return value
+            if self.generations.get(name, 0) == generation:
+                self.entries[name] = (now, value)
+        return generation, now, value
 
     def versions(self, name: str) -> list[str]:
         """Oldest first, like Store.versions."""
         now = time.monotonic()
         with self.lock:
             hit = self.lists.get(name)
+            generation = self.generations.get(name, 0)
         if hit and now - hit[0] < self.ttl:
             return hit[1]
         versions = self.store.versions(name)
         with self.lock:
-            self.lists[name] = (now, versions)
+            if self.generations.get(name, 0) == generation:
+                self.lists[name] = (now, versions)
         return versions
 
-    def put(self, name: str, value: tuple[str, str, str], versions: list[str] | None) -> None:
-        """What a write just made true: (current, visibility, owner), and the versions when
-        known; fresh for `ttl` seconds from now."""
-        now = time.monotonic()
+    def put(
+        self,
+        name: str,
+        snapshot: tuple[int, float, tuple],
+        value: tuple[str, str, str],
+        versions: list[str] | None,
+    ) -> bool:
+        """What a saved edit made true: (current, visibility, owner), and the versions when
+        known, kept as old as the snapshot the save started from (its visibility was read
+        then). Only when nothing changed the page since that snapshot; otherwise the page is
+        forgotten, so the next request reads it fresh. True when kept."""
+        generation, read_at, _ = snapshot
         with self.lock:
-            self.entries[name] = (now, value)
+            if self.generations.get(name, 0) != generation:
+                self.entries.pop(name, None)
+                self.lists.pop(name, None)
+                return False
+            # A change of its own: a read still under way (of the state before) is not kept.
+            self.generations[name] = generation + 1
+            self.entries[name] = (read_at, value)
             if versions is None:
                 self.lists.pop(name, None)
             else:
-                self.lists[name] = (now, list(versions))
+                self.lists[name] = (read_at, list(versions))
+            return True
 
     def forget(self, name: str) -> None:
+        """After a change to the page: read it fresh next time, and never keep a value read
+        before now."""
         with self.lock:
+            self.generations[name] = self.generations.get(name, 0) + 1
             self.entries.pop(name, None)
             self.lists.pop(name, None)
