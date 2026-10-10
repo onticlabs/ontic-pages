@@ -899,7 +899,9 @@ def make_handler(gw: Gateway):
                 is_html = headers["Content-Type"].startswith("text/html")
                 bridge = is_html and frame
                 etag = entry.etag
-                if bridge:  # rewritten HTML: its own ETag, and always revalidated
+                # Rewritten HTML: its own ETag, and always revalidated. The tag carries the
+                # version, which the file's ETag starts with, so the ETag changes with it.
+                if bridge:
                     etag = f'{etag[:-1]}-b{gw.assets.bridge_hash}"'
                     headers["Cache-Control"] = revalidate
                 headers["ETag"] = etag
@@ -916,7 +918,8 @@ def make_handler(gw: Gateway):
                     body = body or gw.store.get(key)["Body"]
                     data = body.read()
                 if bridge:
-                    return self.send_body(200, inject(data, gw.assets.bridge_tag), headers)
+                    tag = gw.assets.bridge_tag(version)
+                    return self.send_body(200, inject(data, tag), headers)
                 headers["Accept-Ranges"] = "bytes"
                 if data is not None:
                     return self.send_body(200, data, headers)

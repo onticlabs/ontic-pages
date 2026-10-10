@@ -6,9 +6,9 @@
 // sends them to the gateway, which writes a new version (edits.py) and makes it current; the
 // frame shows that text already, so it stays (edit-mode {saved: true} makes it the page's new
 // original text) and only the bar's facts change. While there are unsaved changes a newly
-// published version waits, and leaving the tab asks first. Comment mode suspends editing in the page itself (it hears comment-mode too).
-// To the frame: edit-mode. From it: edit-state and edits. Everything shown is set with
-// textContent.
+// published version waits, and leaving the tab asks first. Comment mode suspends editing in the
+// page itself (it hears comment-mode too). To the frame: edit-mode. From it: edit-state and
+// edits. Everything shown is set with textContent.
 (function () {
   "use strict";
   var bar = window.onticBar;
@@ -74,15 +74,19 @@
     draw();
   }
 
-  // A page loaded in the frame: editing starts there, with nothing changed yet.
-  function start() {
+  // A page loaded in the frame: editing starts there, with nothing changed yet. It is labelled
+  // with the version it says it was served from (bridge.js), never assumed to be the current
+  // one: a reload during a save may have fetched the version before it.
+  function start(served) {
     var lost = changes > 0 && !busy();
     doc += 1;
     clearTimeout(timer);
     state = "idle";
     changes = 0;
-    version = bar.page().current;
-    if (allowed()) post({ ontic: "edit-mode", on: true });
+    version = typeof served === "string" && /^\d{8}T\d{6}Z$/.test(served)
+      ? served : bar.page().current;
+    // An older version than the current one is not edited (the bar loads the current one).
+    if (allowed() && version === bar.page().current) post({ ontic: "edit-mode", on: true });
     show(lost ? "The page reloaded; unsaved changes are gone." : "", false);
   }
 
@@ -219,7 +223,7 @@
   bar.add({
     message: function (msg) {
       if (msg.ontic === "ready") {
-        start();
+        start(msg.version);
       } else if (msg.ontic === "edit-state" && allowed() && !busy()) {
         changed(msg.changes);
         if (msg.save === true) save();

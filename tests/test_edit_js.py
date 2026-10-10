@@ -441,6 +441,26 @@ const unload = () => fire(window, "beforeunload", {}).defaultPrevented;
   q("edit-discard").click();
   q("edit-really").click();
   out.otherDoc.push(swaps - swaps2);  // nothing unsaved now: the saved version fades in
+
+  // A reload during a save fetched the version before it, and says ready only after the
+  // answer: it is labelled with the version it was served from, and the current one loads.
+  const V6 = "20261010T110000Z", V7 = "20261010T120000Z";
+  clock.now += 5000;
+  answers.push({ ok: true, status: 200, body: Object.assign({}, next, { current: V6 }) });
+  fire(window, "focus");
+  await tick(); await tick();
+  out.servedV6 = message({ ontic: "ready", version: V6 });
+  message({ ontic: "edit-state", changes: 1 });
+  q("edit-save").click();
+  answers.push({ ok: true, status: 200,
+    body: { version: V7, page: Object.assign({}, next, { current: V7 }) } });
+  message({ ontic: "edits", path: "/", changes: [{ before: "i", after: "j" }] });
+  await tick(); await tick(); await tick();
+  const swaps3 = swaps;
+  out.staleReady = [message({ ontic: "ready", version: V6 }), swaps - swaps3];
+  message({ ontic: "ready", version: V6 });  // still the old one: not replaced again
+  out.staleReady.push(swaps - swaps3);
+  out.staleReady.push(message({ ontic: "ready", version: V7 }), swaps - swaps3);
   console.log(JSON.stringify(out));
 })();
 """
@@ -568,6 +588,11 @@ def test_bar_edit_flow():
     # A save answered after the frame loaded another document: no saved:true to it, its own
     # changes stay unsaved, the new version is current in the bar and waits for them.
     assert out["otherDoc"] == [[], "2 changes", True, "v6", 0, 1]
+    # The page says which version it was served from: an older one than current is not
+    # edited and is replaced by the current one (once); the current one is edited.
+    on = [[{"ontic": "edit-mode", "on": True}, CONTENT]]
+    assert out["servedV6"] == on
+    assert out["staleReady"] == [[], 1, 1, on, 1]
 
 
 @pytest.mark.parametrize("role, viewing", [("viewer", None), ("owner", "v0")])

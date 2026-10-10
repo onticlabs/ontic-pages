@@ -96,6 +96,7 @@
     switch (msg.ontic) {
       case "ready":
         if (!fromPending) reveal();
+        behind(msg.version);
         break;
       case "nav":
         if (fromFrame && typeof msg.path === "string" && typeof msg.title === "string") {
@@ -114,6 +115,19 @@
       // Comments (comments.js) and edit text in place (edit.js) handle their own types.
     }
   });
+
+  // A page that says it was served from another version than the current one (fetched before a
+  // save or a publish made a new one current) is replaced by the current one, unless a feature
+  // holds the frame; once per current version, so a lagging server cannot make it loop.
+  var VERSION_ID = /^\d{8}T\d{6}Z$/;
+  var replacedFor = null;
+  function behind(version) {
+    if (view.version || typeof version !== "string" || !VERSION_ID.test(version)) return;
+    if (version === page.current || replacedFor === page.current) return;
+    if (features.some(function (f) { return f.holds && f.holds(); })) return;
+    replacedFor = page.current;
+    swap();
+  }
 
   function onNav(p, title) {
     if (p.charAt(0) !== "/" || p.charAt(1) === "/" || p.length > 4096) return;

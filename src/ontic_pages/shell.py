@@ -102,9 +102,11 @@ class Assets:
         data, digest = self.items[fname]
         return data, content_type(fname), asked == digest
 
-    @property
-    def bridge_tag(self) -> bytes:
-        return f'<script src="{self.url("bridge.js")}"></script>'.encode()
+    def bridge_tag(self, version: str) -> bytes:
+        """The bridge's script tag, with the version the page was served from: the bridge
+        tells the bar (ready, nav), so the bar knows what the frame really shows."""
+        src, served = self.url("bridge.js"), html.escape(version, quote=True)
+        return f'<script src="{src}" data-version="{served}"></script>'.encode()
 
     @property
     def bridge_hash(self) -> str:
