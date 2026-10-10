@@ -68,6 +68,13 @@ def test_not_signed_in_or_expired(local, gateway_env, site):
         main(["list"])
 
 
+def test_messages_name_the_command_the_user_ran(local, gateway_env, monkeypatch):
+    gateway_env(local())
+    monkeypatch.setenv("ONTIC_PAGES_PROG", "ontic pages")
+    with pytest.raises(SystemExit, match="run ontic pages login"):
+        main(["list"])
+
+
 def test_publish_through_the_gateway(local, gateway_env, store, s3, uploads, site, capsys):
     srv = local()
     gateway_env(srv, OWNER)

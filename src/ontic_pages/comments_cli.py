@@ -67,7 +67,7 @@ def write(client: remote.Api, path: str, body: dict, out=None) -> dict:
         print(f"too many changes this minute, waiting {WAIT_SECONDS:.0f} s", file=out, flush=True)
         time.sleep(WAIT_SECONDS)
     if status == 401:
-        raise SystemExit(remote.NOT_SIGNED_IN)
+        raise SystemExit(remote.not_signed_in())
     if status >= 300:
         raise SystemExit(f"{answer.get('error') or 'failed'} (HTTP {status})")
     return answer

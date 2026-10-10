@@ -107,7 +107,7 @@ COMMENT_WRITE = re.compile(
 )
 APPROVE = "/_api/cli/approve"
 SECRET_QUERY = re.compile(r"\b(code)=[^&\s]+")
-EXPIRED = "not signed in, or the sign-in expired: run ontic-pages login"
+EXPIRED = "not signed in, or the sign-in expired: run ontic pages login"
 SMALL_BODY, LIST_BODY = 4096, 64 * 1024  # Caddy refuses anything over 64 KB anyway
 COMMENT_BODY = 32 * 1024  # 4000 characters of text, as UTF-8 and JSON, and the anchor
 LOGIN_CSP = (
@@ -609,7 +609,7 @@ def make_handler(gw: Gateway):
             if not allowed("ontic", "", email, site.email_domain):
                 problem = f"Only @{site.email_domain} accounts can sign in the command line."
             elif not gw.codes.open(code):
-                problem = "This sign-in link is used up or too old. Run ontic-pages login again."
+                problem = "This sign-in link is used up or too old. Run ontic pages login again."
             page = login_html(email, code, problem, gw.assets)
             self.send_body(400 if problem else 200, page.encode(), {
                 "Content-Type": "text/html; charset=utf-8",
