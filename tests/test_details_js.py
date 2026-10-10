@@ -1,4 +1,4 @@
-"""The Details panel in the title menu (details.js, in the served bar.js), in node with the small
+"""The Details panel of the info button (details.js, in the served bar.js), in node with the small
 fake DOM of test_edit_js: asked only when opened, once per version, drawn with textContent."""
 
 import pytest
@@ -37,15 +37,17 @@ El.prototype.focus = function () { focused = this.id; };
 const titleBtn = E("button", { id: "title-btn" });
 const details = E("button", { id: "m-details" });
 const main = E("div", { id: "m-main" }, [details]);
-const back = E("button", { id: "d-back" });
+const menu = E("div", { id: "title-menu", role: "menu" }, [main]);
+const infoBtn = E("button", { id: "info-btn", "aria-expanded": "false" });
+const dtitle = E("span", { id: "d-title", tabindex: "-1" }, ["Details"]);
 const dbody = E("div", { id: "d-body" });
-const view = E("div", { id: "d-view" }, [back, dbody]);
-const menu = E("div", { id: "title-menu", role: "menu" }, [main, view]);
-menu.hidden = view.hidden = true;
+const panel = E("div", { id: "info-panel", role: "dialog" }, [
+  E("div", { class: "d-head" }, [dtitle, E("a", { id: "d-open" })]), dbody]);
+menu.hidden = panel.hidden = true;
 const stage = E("main", { id: "stage" }, [frame,
   E("div", { id: "status" }, [E("div", { class: "spinner" })])]);
-const bar = E("header", { class: "bar" }, [E("span", { class: "grow" }), titleBtn, menu, access,
-  ...ids.map((id) => E("div", { id }))]);
+const bar = E("header", { class: "bar" }, [E("span", { class: "grow" }), titleBtn, menu, infoBtn,
+  panel, access, ...ids.map((id) => E("div", { id }))]);
 const body = E("body", {}, [bar, stage]);
 const byId = (id) => (id === "ontic-facts" ? { textContent: JSON.stringify(facts) }
   : body.querySelectorAll("*").find((n) => n.id === id) || null);
@@ -78,13 +80,16 @@ function show(n) {
   }
   return inner;
 }
-const state = () => ({ menu: !menu.hidden, main: !main.hidden, view: !view.hidden,
-  role: menu.getAttribute("role"), focused });
+const state = () => ({ menu: !menu.hidden, panel: !panel.hidden,
+  expanded: infoBtn.getAttribute("aria-expanded"), focused });
+// VIA: "button" opens with the info button first, then the menu's Details item; "menu" the
+// other way round.
+const first = VIA === "menu" ? details : infoBtn, second = VIA === "menu" ? infoBtn : details;
 (async () => {
   const out = {};
   titleBtn.click();
-  out.opened = [state(), fetches.length];  // nothing asked before the panel opens
-  details.click();
+  out.menu = [state(), fetches.length];  // nothing asked before the panel opens
+  first.click();
   out.loading = [state(), dbody.childNodes.map(show).join(""), fetches.slice()];
   for (let i = 0; i < 5; i++) await tick();
   out.panel = dbody.childNodes.map(show).join("").split("\n").filter(Boolean);
@@ -92,34 +97,38 @@ const state = () => ({ menu: !menu.hidden, main: !main.hidden, view: !view.hidde
   copy.forEach((b) => b.click());
   out.copied = copied.slice();
   out.copyLabels = copy.map((b) => b.getAttribute("aria-label"));
-  back.click();
-  out.back = state();
-  details.click();
-  out.cached = fetches.length;  // the same version is not asked again
-  fire(menu, "keydown", { key: "Escape" });
+  focused = null;
+  fire(panel, "keydown", { key: "Escape" });
   out.escape = state();
   titleBtn.click();
-  out.reopened = state();
+  second.click();
+  out.reopened = [state(), fetches.length];  // the same version is not asked again
+  details.click();
+  out.again = state();  // the Details item leaves an open panel open
+  infoBtn.click();
+  out.toggled = state();
   console.log(JSON.stringify(out));
 })();
 """
 
 
-def panel(answer, viewing=None, status=200):
-    """Opens the menu, then Details, copies every value, Back, Details again, Escape, reopens."""
+def panel(answer, viewing=None, status=200, via="button"):
+    """Opens the title menu, then the panel (with the info button, or the menu's Details item),
+    copies every value, Escape, opens it the other way, again from the menu, then the button."""
     return run(
         PANEL, served("bar.js"), CURRENT=CURRENT, OLD=OLD, VIEWING=viewing, ANSWER=answer,
-        STATUS=status,
+        STATUS=status, VIA=via,
     )  # fmt: skip
 
 
 def test_panel_for_an_old_version():
     out = panel(FULL, viewing=OLD)
-    closed_main = {"menu": True, "main": True, "view": False, "role": "menu", "focused": None}
-    assert out["opened"] == [closed_main, 0]
+    menu = {"menu": True, "panel": False, "expanded": "false", "focused": None}
+    shown = {"menu": False, "panel": True, "expanded": "true", "focused": "d-title"}
+    closed = {"menu": False, "panel": False, "expanded": "false", "focused": "info-btn"}
+    assert out["menu"] == [menu, 0]
     state, text, fetches = out["loading"]
-    assert state == {"menu": True, "main": False, "view": True, "role": "dialog",
-                     "focused": "d-back"}  # fmt: skip
+    assert state == shown  # the info button closes the menu and focus moves into the panel
     assert text == "\np: Loading…"
     assert fetches == [[f"/_api/pages/report/versions/{OLD}", "GET"]]
     assert out["panel"] == [
@@ -152,11 +161,21 @@ def test_panel_for_an_old_version():
     ]
     assert out["copied"] == [OLD, SHA, "7", "https://wandb.ai/x/y", "javascript:alert(1)"]
     assert out["copyLabels"][:2] == ["Copy version id", "Copy commit"]
-    assert out["back"] == {**closed_main, "focused": "m-details"}
-    assert out["cached"] == 1
-    assert out["escape"] == {"menu": False, "main": True, "view": False, "role": "menu",
-                             "focused": "title-btn"}  # fmt: skip
-    assert out["reopened"]["main"] and not out["reopened"]["view"]
+    assert out["escape"] == closed  # Escape closes it and focus goes back to the info button
+    assert out["reopened"] == [shown, 1]  # the menu's Details item: closes the menu, cached
+    assert out["again"] == shown
+    assert out["toggled"] == {**closed, "focused": "d-title"}  # the button closes it again
+
+
+def test_panel_from_the_title_menu():
+    out = panel(FULL, viewing=OLD, via="menu")
+    assert out["menu"][1] == 0
+    state, text, fetches = out["loading"]
+    assert state == {"menu": False, "panel": True, "expanded": "true", "focused": "d-title"}
+    assert fetches == [[f"/_api/pages/report/versions/{OLD}", "GET"]]
+    assert out["panel"][0] == "p: Depth <b>eval</b>"
+    assert out["escape"]["focused"] == "info-btn" and not out["escape"]["panel"]
+    assert out["reopened"] == [state, 1]  # the info button: cached
 
 
 def test_panel_current_version_without_github():
@@ -186,7 +205,7 @@ def test_panel_empty_and_signed_out():
         "p: Sign in to see the details. "
         "[Sign in](/oauth2/start?rd=https%3A%2F%2Fpages.test%2Freport%2F)"
     ]
-    assert out["cached"] == 2  # a failure is asked again
+    assert out["reopened"][1] == 2  # a failure is asked again
     out = panel({"error": "not allowed"}, status=403)
     assert out["panel"] == ["p: not allowed", "button: Try again"]
 

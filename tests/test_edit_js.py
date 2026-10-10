@@ -265,7 +265,8 @@ const access = E("select", { id: "s-access" });
 access.options = [];
 access.selectedIndex = 0;
 const ids = ["m-by", "m-owner", "m-time", "m-desc", "m-versions", "old", "s-note", "s-explain",
-  "s-owner", "title-btn", "title-menu", "share-btn", "share-panel", "m-raw", "slow", "retry"];
+  "s-owner", "title-btn", "title-menu", "info-btn", "info-panel", "share-btn", "share-panel",
+  "m-raw", "slow", "retry"];
 const stage = E("main", { id: "stage" }, [frame,
   E("div", { id: "status" }, [E("div", { class: "spinner" })])]);
 const bar = E("header", { class: "bar" }, [E("span", { class: "grow" }), access,

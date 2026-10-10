@@ -1,12 +1,14 @@
-/* Details: the title menu as a panel with what page.json says (details.js). */
-.menu.details-open { width: 380px; }
+/* Details: the info button's panel with what page.json says (details.js). */
+.info-panel { width: 380px; }
+#info-btn[aria-expanded="true"] { background: var(--hover); }
 .d-head { display: flex; align-items: center; gap: 6px; padding: 0 2px 6px;
           border-bottom: 1px solid var(--line); margin-bottom: 6px; }
 .d-title { font-weight: 600; flex: 1 1 auto; }
+.d-title:focus { outline: none; }
 .d-open { font-size: 12px; color: var(--accent); text-decoration: none; padding: 4px 6px;
           border-radius: 6px; white-space: nowrap; }
 .d-open:hover { background: var(--hover); }
-.d-body { padding: 2px 8px 6px; }
+.d-body { padding: 2px 0 0; }
 .d-body a { color: var(--accent); text-decoration: none; }
 .d-body a:hover { text-decoration: underline; }
 .d-note { padding: 6px 0; }
@@ -18,7 +20,7 @@
 .d-meta dt { font-weight: 500; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
              max-width: 140px; }
 .d-wrap { overflow-wrap: anywhere; word-break: break-word; }
-.d-body .label { padding: 10px 0 4px; }
+.panel .d-body .label { padding: 10px 0 4px; }
 .d-code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .d-body .tag { display: inline-block; margin-left: 6px; font-size: 11px; padding: 0 6px;
                border-radius: 8px; color: var(--accent); border: 1px solid currentColor; }
@@ -30,5 +32,5 @@
 .d-copy:hover { color: var(--text); background: var(--hover); }
 .d-body .item { margin-top: 4px; }
 @media (max-width: 600px) {
-  .menu.details-open { width: auto; }
+  .info-panel { width: auto; }
 }

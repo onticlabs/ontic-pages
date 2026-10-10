@@ -39,6 +39,7 @@
     update: function (next) { update(next); },
     swap: function () { swap(); },
     close: function () { closeAll(); },
+    open: function (panelId) { openPop(panelId); },
     copy: function (button, text) { copy(button, text); },
     relative: function (iso) { return relative(iso); },
     when: function (iso) { return when(iso); }
@@ -139,7 +140,8 @@
 
   // ---- menus ---------------------------------------------------------------------------------
 
-  var pops = [["title-btn", "title-menu"], ["share-btn", "share-panel"]];
+  var pops = [["title-btn", "title-menu"], ["info-btn", "info-panel"],
+    ["share-btn", "share-panel"]];
   function closeAll(except) {
     pops.forEach(function (pair) {
       if (pair[1] === except) return;
@@ -159,6 +161,12 @@
     if (!open) return;
     features.forEach(function (f) { if (f.opened) f.opened(pair[1]); });
     render();
+  }
+  // Opens the pop whose box is `id` (closing the others), unless it is open already.
+  function openPop(id) {
+    var pair = pops.filter(function (p) { return p[1] === id; })[0];
+    var box = pair && $(pair[1]);
+    if (box && box.hidden) toggle(pair);
   }
 
   // ---- what the bar shows ------------------------------------------------------------------
