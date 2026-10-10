@@ -25,9 +25,10 @@
   function $(id) { return document.getElementById(id); }
   function frame() { return $("frame"); }
 
-  // Features in files of their own (edit.js, served after this one) hook in here: message(msg)
-  // for each message from the frame, render() after the bar is drawn, holds() true to keep a new
-  // version from fading in over unsaved work. The page in the frame cannot reach this object.
+  // Features in files of their own (details.js, edit.js, served after this one) hook in here:
+  // message(msg) for each message from the frame, render() after the bar is drawn, opened(id)
+  // when a menu or panel opens, holds() true to keep a new version from fading in over unsaved
+  // work. The page in the frame cannot reach this object.
   var features = [];
   window.onticBar = {
     add: function (feature) { features.push(feature); },
@@ -36,7 +37,11 @@
     origin: origin,
     frame: frame,
     update: function (next) { update(next); },
-    swap: function () { swap(); }
+    swap: function () { swap(); },
+    close: function () { closeAll(); },
+    copy: function (button, text) { copy(button, text); },
+    relative: function (iso) { return relative(iso); },
+    when: function (iso) { return when(iso); }
   };
   function isNumber(y) { return typeof y === "number" && isFinite(y) && y >= 0 && y < 1e9; }
 
@@ -151,7 +156,9 @@
     closeAll(pair[1]);
     box.hidden = !open;
     button.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) render();
+    if (!open) return;
+    features.forEach(function (f) { if (f.opened) f.opened(pair[1]); });
+    render();
   }
 
   // ---- what the bar shows ------------------------------------------------------------------
@@ -222,8 +229,11 @@
 
   // ---- copy, share ---------------------------------------------------------------------------
 
-  function copy(button) {
-    var text = location.href;
+  // Copies `text` (the page's address by default), then says so on the button for a moment.
+  // Called inside the click handler, as the clipboard asks; else a selected textarea and
+  // execCommand.
+  function copy(button, text) {
+    text = typeof text === "string" ? text : location.href;
     var say = function (word) {
       var before = button.getAttribute("data-label") || button.textContent;
       button.setAttribute("data-label", before);

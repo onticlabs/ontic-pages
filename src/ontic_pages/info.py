@@ -10,7 +10,10 @@ from urllib.parse import quote
 from .store import Store
 
 GITHUB_RE = re.compile(r"^(?:https://|ssh://git@|git@)github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$")
 NAME_CHARS, DESCRIPTION_CHARS = 32, 60
+DETAIL_FIELDS = ("published_at", "published_by", "description", "meta", "files")
+GIT_FIELDS = ("remote", "branch", "commit", "dirty")
 
 
 def history(store: Store, name: str) -> tuple[str | None, list[dict]]:
@@ -23,6 +26,30 @@ def history(store: Store, name: str) -> tuple[str | None, list[dict]]:
 def github_url(remote: str | None) -> str | None:
     m = GITHUB_RE.match(remote or "")
     return f"https://github.com/{m.group(1)}" if m else None
+
+
+def commit_url(git: dict | None) -> str | None:
+    """The commit on GitHub, for a github.com remote (ssh or https form) and a hex commit."""
+    git = git or {}
+    repo, commit = github_url(git.get("remote")), git.get("commit")
+    if repo and isinstance(commit, str) and COMMIT_RE.match(commit):
+        return f"{repo}/commit/{commit}"
+    return None
+
+
+def details(name: str, version: str, current: str, visibility: str, page: dict) -> dict:
+    """What the bar's Details panel shows for one version: the page.json fields a signed-in
+    viewer may see (empty ones left out), and the GitHub links worked out here."""
+    out: dict = {"name": name, "version": version, "current": current, "visibility": visibility}
+    for key in DETAIL_FIELDS:
+        if page.get(key) not in (None, "", {}, []):
+            out[key] = page[key]
+    git = page.get("git")
+    if isinstance(git, dict) and git:
+        out["git"] = {k: git[k] for k in GIT_FIELDS if git.get(k) not in (None, "")}
+        out["git"]["repo_url"] = github_url(git.get("remote"))
+        out["git"]["commit_url"] = commit_url(git)
+    return out
 
 
 def short(text: str, limit: int) -> str:
@@ -64,6 +91,32 @@ def info_text(name: str, current: str | None, metas: list[dict], visibility: str
     return "\n".join(lines)
 
 
+# The bar's look (static/bar.css): same font, colors, light and dark. No script.
+INFO_CSS = """
+:root { color-scheme: light dark; --bg: #fbfbfa; --card: #fff; --text: #1f1f1e;
+  --muted: #6b6b68; --line: #e4e4e1; --hover: #efefec; --accent: #2f5bd3; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1d1d1c; --card: #262625; --text: #ececea; --muted: #a3a39f; --line: #353533;
+    --hover: #30302e; --accent: #8aa8ff; }
+}
+body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0;
+  padding: 24px 16px 48px; color: var(--text); background: var(--bg); }
+body > * { max-width: 760px; margin-left: auto; margin-right: auto; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1 { font-size: 20px; margin: 4px auto 6px; overflow-wrap: anywhere; }
+h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 24px auto 6px; }
+p { margin: 0 auto 10px; overflow-wrap: anywhere; }
+.nav { color: var(--muted); font-size: 13px; }
+table { display: block; overflow-x: auto; border-collapse: collapse; background: var(--card);
+  border: 1px solid var(--line); border-radius: 10px; padding: 4px 0; }
+th, td { text-align: left; padding: 5px 12px; vertical-align: top; overflow-wrap: anywhere; }
+th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+tr.current td { font-weight: 600; }
+td:first-child { font-variant-numeric: tabular-nums; }
+"""
+
+
 def info_html(name: str, current: str | None, metas: list[dict], visibility: str) -> str:
     e = html.escape
     page = shown(current, metas)
@@ -77,7 +130,8 @@ def info_html(name: str, current: str | None, metas: list[dict], visibility: str
     if git:
         remote = f'<a href="{e(repo)}">{e(repo)}</a>' if repo else e(git.get("remote") or "none")
         short_sha = e(commit[:8])
-        sha = f'<a href="{e(repo)}/commit/{e(commit)}">{short_sha}</a>' if repo else short_sha
+        link = commit_url(git)
+        sha = f'<a href="{e(link)}">{short_sha}</a>' if link else short_sha
         dirty = " (uncommitted changes)" if git.get("dirty") else ""
         git_html = f"{remote}, branch {e(git.get('branch') or '')}, commit {sha}{dirty}"
     else:
@@ -92,16 +146,12 @@ def info_html(name: str, current: str | None, metas: list[dict], visibility: str
             f"<td>{short(m.get('description', ''), DESCRIPTION_CHARS)}</td></tr>"
         )
     return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>{e(name)}: page info</title>
+<html lang="en"><head><meta charset="utf-8"><title>{e(name)}: details</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body {{ font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; padding: 0 1rem; }}
-th, td {{ text-align: left; padding: .2rem .6rem .2rem 0; vertical-align: top; }}
-h1 {{ overflow-wrap: anywhere; }}
-tr.current td {{ font-weight: 600; }}
-</style></head><body>
-<p><a href="/">All pages</a></p>
-<h1><a href="/{quote(name)}/">{e(name)}</a></h1>
+<meta name="color-scheme" content="light dark">
+<style>{INFO_CSS}</style></head><body>
+<p class="nav"><a href="/">All pages</a> / <a href="/{quote(name)}/">{e(name)}</a></p>
+<h1>{e(name)}</h1>
 <p>{e(page.get("description", ""))}</p>
 <table>
 <tr><th>Visibility</th><td>{e(visibility)}</td></tr>

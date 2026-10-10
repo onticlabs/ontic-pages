@@ -7,6 +7,9 @@ to a page's HTML only when that HTML is loaded into the frame; it reports naviga
 and readiness to the shell by postMessage, and hands links to the apex to the shell, which opens
 them in the whole tab (the apex refuses to be framed). Stored files are never changed.
 
+The title menu's Details item (static/details.js, details.css) turns the menu into a panel with
+what page.json says about the version being viewed, asked from the API when it opens.
+
 Signed-in viewers also get the comments (static/comments.js and comments.css in the bar,
 static/pins.js served as the second part of the bridge): threads attached to elements of the
 page, with pins and outlines on it, a thread popover and a side panel with every thread. The
@@ -41,6 +44,7 @@ BRIDGE_RE = re.compile(r"^/_bridge\.([0-9a-f]{1,64})\.js$")
 ICONS = {
     "home": '<path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10v9h11v-9"/>',
     "chevron": '<path d="M7 10l5 5 5-5"/>',
+    "back": '<path d="M14 6l-6 6 6 6"/>',
     "private": '<rect x="5.5" y="11" width="13" height="9" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/>',  # noqa: E501
     "ontic": '<circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M15.5 6.2a3 3 0 0 1 0 5.6"/><path d="M17 14.3a5.5 5.5 0 0 1 3.5 4.7"/>',  # noqa: E501
     "public": '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/>',  # noqa: E501
@@ -56,8 +60,8 @@ def icon(name: str, cls: str = "") -> str:
 # The files served, each made of these static files in order: a feature in a file of its own
 # (comment pins, edit text in place) comes after the file it extends.
 BUNDLES = {
-    "bar.js": ("bar.js", "edit.js"),
-    "bar.css": ("bar.css", "edit.css"),
+    "bar.js": ("bar.js", "details.js", "edit.js"),
+    "bar.css": ("bar.css", "details.css", "edit.css"),
     "comments.js": ("comments.js",),
     "comments.css": ("comments.css",),
     "bridge.js": ("bridge.js", "pins.js", "edit-bridge.js"),
@@ -225,6 +229,7 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 <div class="pop" id="title-pop">
 <button class="title" id="title-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="title-menu"><span class="title-text" id="title-text">{e(name)}</span>{icon("chevron", "chev")}</button>
 <div class="menu" id="title-menu" role="menu" hidden>
+<div id="m-main">
 <div class="facts">
 <p id="m-by"{"" if by else " hidden"}>Page by <span id="m-owner">{e(by)}</span></p>
 <p class="muted" id="m-updated">Updated <time id="m-time" datetime="{e(shown.get("published_at", ""))}">{e(when(shown.get("published_at", "")))}</time></p>
@@ -235,8 +240,13 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 <div class="sep"></div>
 <button class="item" type="button" role="menuitem" data-copy>Copy link</button>
 <a class="item" role="menuitem" id="m-raw" href="{e(view["raw"])}" target="_blank" rel="noopener">Open without the bar</a>
-<a class="item" role="menuitem" href="/{e(name)}/_info">Page info</a>
+<button class="item" type="button" role="menuitem" id="m-details" aria-controls="d-view">Details</button>
 <a class="item" role="menuitem" href="/">All pages</a>
+</div>
+<div class="details" id="d-view" role="group" aria-labelledby="d-title" hidden>
+<div class="d-head"><button class="icon-btn" id="d-back" type="button" aria-label="Back to the menu" title="Back">{icon("back")}</button><span class="d-title" id="d-title">Details</span><a class="d-open" id="d-open" href="/{e(name)}/_info">Open as a page</a></div>
+<div class="d-body" id="d-body" aria-live="polite"></div>
+</div>
 </div>
 </div>
 <a class="old" id="old" href="/{e(name)}/"{"" if old else " hidden"} title="You are looking at an older version. Open the current one.">Old version<span class="wide"> &middot; view current</span></a>

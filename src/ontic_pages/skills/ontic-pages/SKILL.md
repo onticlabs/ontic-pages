@@ -88,7 +88,7 @@ The owner can also change it from the Share button in the bar.
 ```bash
 ontic pages list                        # every page you can open, visibility, current version
 ontic pages list --name depth-eval      # its versions, newest first, * marks the current one
-ontic pages info depth-eval             # page.json plus the versions (also Page info in the bar)
+ontic pages info depth-eval             # page.json plus the versions (also Details in the bar)
 ontic pages set-current depth-eval 20261007T153000Z   # serve an older version again
 ```
 

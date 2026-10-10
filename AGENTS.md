@@ -41,6 +41,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   (login.js). Static files are package data, served at content-hashed URLs. User text goes into
   the bar with textContent, never innerHTML. A feature in files of its own is served as part of
   these or next to them (`shell.BUNDLES`):
+  - Details (the title menu's panel with one version's page.json, asked from
+    `/_api/pages/<name>/versions/<version>` when opened): `details.js` (after bar.js, hooked in
+    through `window.onticBar`) and `details.css` (after bar.css).
   - comments: `comments.js` and `comments.css` in the bar, `pins.js` after bridge.js (the pins,
     the hover outline in comment mode, the outline of the open or hovered thread's element). The
     page in the frame never gets comment text or emails, only pins and `highlight {id}`.
@@ -57,7 +60,7 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
   `helpers.upload_server` takes its presigned PUTs and answers its GETs). `test_js.py` runs
   bridge.js and bar.js in node, `test_comments_js.py` pins.js and comments.js, and
-  `test_edit_js.py` the served edit mode, each with a small fake DOM (all skipped without node).
+  `test_edit_js.py` the served edit mode, `test_details_js.py` the Details panel, each with a small fake DOM (all skipped without node).
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules

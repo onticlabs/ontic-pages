@@ -267,7 +267,8 @@ old copies. A deleted comment keeps its place with an empty body.
   `/<name>/<path>` is the bar around a frame showing `<path>` of the page, and
   `/<name>/_v/<version>/<path>` the same for one version; `/<name>/_info` is a plain
   page with what page.json says and every version; `/_api/pages/<name>` gives the
-  page facts as JSON, and `POST /_api/pages/<name>/visibility` changes visibility
+  page facts as JSON, `/_api/pages/<name>/versions/<version>` one version's details for the
+  bar's Details panel (signed in), and `POST /_api/pages/<name>/visibility` changes visibility
   (owner only, from the bar or the command line); `POST /_api/pages/<name>/edits` saves text
   edited in the bar (owner only). `/_api/pages/<name>/comments` reads the comment threads and
   takes new ones, replies, resolve and delete (signed in, from the bar or the command line). The
@@ -280,10 +281,18 @@ old copies. A deleted comment keeps its place with an empty body.
   without the bar.
 
 The bar: the home link, the title menu (who published, when, the description, the
-versions, Copy link, Open without the bar, Page info, All pages), an "old version"
+versions, Copy link, Open without the bar, Details, All pages), an "old version"
 marker, the comment button (signed in only), the edit counter with Save and Discard (the owner,
 only once a text changed; see Edit text in place), your initial (or Sign in), and Share (owner,
 general access, Copy link). Escape or a click elsewhere, in the page too, closes a menu.
+
+Details turns the title menu into a panel about the version you are looking at (the current one
+or an old one): the description, who published it and when, the version id, visibility, git
+(remote, branch, commit, linked to GitHub for a github.com remote, and a marker for uncommitted
+changes), "Edited in the browser from" with a link to that version, the file count and every
+`--meta` pair. Values can be copied; only http(s) values become links. Back returns to the menu,
+Escape closes it. It needs sign-in, like `/<name>/_info`, which stays as the plain page behind
+its "Open as a page" link.
 
 Comments: the comment button turns on comment mode and shows how many threads are open; its
 menu has Show all comments (a side panel, a bottom sheet on phones) and Show resolved. In
