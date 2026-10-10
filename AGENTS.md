@@ -41,7 +41,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   (login.js). Static files are package data, served at content-hashed URLs. User text goes into
   the bar with textContent, never innerHTML. A feature in files of its own is served as part of
   these or next to them (`shell.BUNDLES`):
-  - Details (the title menu's panel with one version's page.json, asked from
+  - Details (the info button's panel, also opened from the title menu, with one version's
+    page.json, asked from
     `/_api/pages/<name>/versions/<version>` when opened): `details.js` (after bar.js, hooked in
     through `window.onticBar`) and `details.css` (after bar.css).
   - comments: `comments.js` and `comments.css` in the bar, `pins.js` after bridge.js (the pins,

@@ -1,10 +1,10 @@
-// Details, the bar's side (served as part of bar.js, after it): the title menu's Details item
-// turns the menu into a panel with what page.json says about the version being viewed (the
-// current one, or an old one under /_v/<version>/): description, who published it and when,
-// the version id, visibility, git, where it was edited from, the files and every --meta pair.
-// Asked from the gateway only when the panel opens, and kept per version. Back (or opening the
-// menu again) shows the menu; Escape closes it and focus goes back to the title. Everything a
-// person wrote is set with textContent, and only http(s) values become links.
+// Details, the bar's side (served as part of bar.js, after it): the info button (or the title
+// menu's Details item) opens a panel with what page.json says about the version being viewed
+// (the current one, or an old one under /_v/<version>/): description, who published it and
+// when, the version id, visibility, git, where it was edited from, the files and every --meta
+// pair. Asked from the gateway only when the panel opens, and kept per version. Focus moves into
+// the panel; Escape closes it and focus goes back to the info button. Everything a person wrote
+// is set with textContent, and only http(s) values become links.
 (function () {
   "use strict";
   var bar = window.onticBar;
@@ -50,30 +50,6 @@
   function text(value) {
     if (value === null || value === undefined) return "";
     return typeof value === "object" ? JSON.stringify(value) : String(value);
-  }
-
-  // ---- open, back ----------------------------------------------------------------------------
-
-  function open() {
-    var menu = $("title-menu");
-    $("m-main").hidden = true;
-    $("d-view").hidden = false;
-    menu.setAttribute("role", "dialog");
-    menu.setAttribute("aria-label", "Details");
-    menu.classList.add("details-open");
-    load(viewing());
-    focus($("d-back"));
-  }
-
-  function back(refocus) {
-    var menu = $("title-menu");
-    showing = null;
-    $("d-view").hidden = true;
-    $("m-main").hidden = false;
-    menu.setAttribute("role", "menu");
-    menu.removeAttribute("aria-label");
-    menu.classList.remove("details-open");
-    if (refocus) focus($("m-details"));
   }
 
   // ---- asking the gateway ----------------------------------------------------------------------
@@ -222,24 +198,28 @@
   // ---- wiring ----------------------------------------------------------------------------------
 
   bar.add({
-    opened: function (id) { if (id === "title-menu" && $("d-view")) back(false); },
+    opened: function (id) {
+      if (id !== "info-panel") return;
+      load(viewing());
+      focus($("d-title"));
+    },
     // A new current version while the panel shows the current one: show that one instead.
     render: function () {
-      var menu = $("title-menu");
-      if (showing && menu && !menu.hidden && showing !== viewing()) load(viewing());
+      var panel = $("info-panel");
+      if (showing && panel && !panel.hidden && showing !== viewing()) load(viewing());
     }
   });
 
   document.addEventListener("DOMContentLoaded", function () {
-    if (!$("m-details") || !$("d-view")) return;
-    $("m-details").addEventListener("click", open);
-    $("d-back").addEventListener("click", function () { back(true); });
-    $("title-menu").addEventListener("keydown", function (event) {
-      if (event.key !== "Escape" || $("d-view").hidden) return;
+    var panel = $("info-panel");
+    if (!panel) return;
+    var item = $("m-details");
+    if (item) item.addEventListener("click", function () { bar.open("info-panel"); });
+    panel.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape") return;
       event.stopPropagation();
       bar.close();
-      back(false);
-      focus($("title-btn"));
+      focus($("info-btn"));
     });
   });
 })();

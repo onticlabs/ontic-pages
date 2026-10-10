@@ -169,7 +169,8 @@ def test_shell_has_comments_when_signed_in(serve, store, report):
     bridge = re.search(rb'src="(/_bridge\.[0-9a-f]+\.js)"', framed).group(1).decode()
     script = request(srv, bridge, host=f"report.{APEX}")[2]
     assert b'"comment-at"' in script and script.count(f'"{ORIGIN}"'.encode()) == 3
-    # Signed out on a public page: no comments at all.
+    # Signed out on a public page: no comments at all, but the info button (Details).
     store.set_visibility("report", "public")
     body = request(srv, "/report/", who=None)[2].decode()
     assert "cm-btn" not in body and "/_bar/comments." not in body
+    assert 'id="info-btn"' in body and 'id="info-panel"' in body

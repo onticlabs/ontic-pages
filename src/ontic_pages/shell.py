@@ -7,8 +7,9 @@ to a page's HTML only when that HTML is loaded into the frame; it reports naviga
 and readiness to the shell by postMessage, and hands links to the apex to the shell, which opens
 them in the whole tab (the apex refuses to be framed). Stored files are never changed.
 
-The title menu's Details item (static/details.js, details.css) turns the menu into a panel with
-what page.json says about the version being viewed, asked from the API when it opens.
+The info button left of the comments (and the title menu's Details item) opens the Details panel
+(static/details.js, details.css): what page.json says about the version being viewed, asked from
+the API when it opens.
 
 Signed-in viewers also get the comments (static/comments.js and comments.css in the bar,
 static/pins.js served as the second part of the bridge): threads attached to elements of the
@@ -44,10 +45,10 @@ BRIDGE_RE = re.compile(r"^/_bridge\.([0-9a-f]{1,64})\.js$")
 ICONS = {
     "home": '<path d="M4 11.5 12 5l8 6.5"/><path d="M6.5 10v9h11v-9"/>',
     "chevron": '<path d="M7 10l5 5 5-5"/>',
-    "back": '<path d="M14 6l-6 6 6 6"/>',
     "private": '<rect x="5.5" y="11" width="13" height="9" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/>',  # noqa: E501
     "ontic": '<circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M15.5 6.2a3 3 0 0 1 0 5.6"/><path d="M17 14.3a5.5 5.5 0 0 1 3.5 4.7"/>',  # noqa: E501
     "public": '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4a12 12 0 0 1 0 16M12 4a12 12 0 0 0 0 16"/>',  # noqa: E501
+    "info": '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><path d="M12 7.6v.4"/>',
     "comment": '<path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',  # noqa: E501
 }
 
@@ -185,6 +186,22 @@ def comments_html() -> str:
     )
 
 
+def info_html(name: str) -> str:
+    """The info button and its Details panel, for every viewer, wired by static/details.js."""
+    return (
+        '<div class="pop" id="info-pop">'
+        '<button class="icon-btn" id="info-btn" type="button" aria-haspopup="dialog" '
+        'aria-expanded="false" aria-controls="info-panel" aria-label="Details" title="Details">'
+        f"{icon('info')}</button>"
+        '<div class="panel info-panel" id="info-panel" role="dialog" aria-labelledby="d-title" '
+        'hidden><div class="d-head">'
+        '<span class="d-title" id="d-title" tabindex="-1">Details</span>'
+        f'<a class="d-open" id="d-open" href="/{html.escape(name)}/_info">Open as a page</a></div>'
+        '<div class="d-body" id="d-body" aria-live="polite"></div>'
+        "</div></div>\n"
+    )
+
+
 def shell_html(page: dict, view: dict, assets: Assets) -> str:
     """page: the facts from the API. view: version (None for current), path (in the frame),
     src (the frame's URL), raw (the same without the bar), signin (a URL, or "")."""
@@ -240,18 +257,14 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 <div class="sep"></div>
 <button class="item" type="button" role="menuitem" data-copy>Copy link</button>
 <a class="item" role="menuitem" id="m-raw" href="{e(view["raw"])}" target="_blank" rel="noopener">Open without the bar</a>
-<button class="item" type="button" role="menuitem" id="m-details" aria-controls="d-view">Details</button>
+<button class="item" type="button" role="menuitem" id="m-details" aria-controls="info-panel">Details</button>
 <a class="item" role="menuitem" href="/">All pages</a>
-</div>
-<div class="details" id="d-view" role="group" aria-labelledby="d-title" hidden>
-<div class="d-head"><button class="icon-btn" id="d-back" type="button" aria-label="Back to the menu" title="Back">{icon("back")}</button><span class="d-title" id="d-title">Details</span><a class="d-open" id="d-open" href="/{e(name)}/_info">Open as a page</a></div>
-<div class="d-body" id="d-body" aria-live="polite"></div>
 </div>
 </div>
 </div>
 <a class="old" id="old" href="/{e(name)}/"{"" if old else " hidden"} title="You are looking at an older version. Open the current one.">Old version<span class="wide"> &middot; view current</span></a>
 <span class="grow"></span>
-{comments}{who}
+{info_html(name)}{comments}{who}
 <div class="pop" id="share-pop">
 <button class="share" id="share-btn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="share-panel">{icon("private", "vis vis-private")}{icon("ontic", "vis vis-ontic")}{icon("public", "vis vis-public")}<span class="wide">Share</span></button>
 <div class="panel" id="share-panel" role="dialog" aria-label="Share {e(name)}" hidden>
