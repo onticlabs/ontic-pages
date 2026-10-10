@@ -112,12 +112,12 @@ def test_tokens_identify(local, store, site):
     srv = local()
     assert call(srv, "/_api/me", OWNER) == (200, {"email": OWNER})
     status, answer = call(srv, "/_api/me")
-    assert status == 401 and "run ontic-pages login" in answer["error"]
+    assert status == 401 and "run ontic pages login" in answer["error"]
     assert call(srv, "/_api/pages/mine", OWNER)[0] == 200
     assert call(srv, "/_api/pages/mine", OTHER)[0] == 403
     expired = sign(SECRET, OWNER, now=1_000_000)
     status, answer = call(srv, "/_api/pages/mine", token=expired)
-    assert status == 401 and "run ontic-pages login" in answer["error"]
+    assert status == 401 and "run ontic pages login" in answer["error"]
     assert call(srv, "/_api/me", token=sign("y" * 40, OWNER))[0] == 401
     # The token decides alone: a cookie does not rescue a bad one.
     assert call(srv, "/_api/me", token="op1.x.y", who=OWNER)[0] == 401

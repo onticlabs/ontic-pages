@@ -7,14 +7,13 @@ The commands talk to the gateway (ONTIC_PAGES_URL) signed in with `ontic-pages l
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 from . import comments_cli, gateway, pull, remote, skills
 from .auth import DEFAULT_AUTH_URL
 from .cache import MB
-from .config import Config, load_config, token_path
+from .config import Config, command_name, load_config, token_path
 from .info import history, info_text
 from .publish import publish
 from .store import VERSION_RE, VISIBILITIES, Store, check_name, make_client
@@ -236,7 +235,7 @@ def cmd_skill(args) -> None:
     if not args.install:
         print(
             "To get ours back over your own copy, delete that file (it comes back on the next "
-            "run) or run ontic-pages skill --install."
+            f"run) or run {command_name()} skill --install."
         )
 
 
@@ -262,11 +261,7 @@ def cmd_gateway(args) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     # Run as `ontic pages ...` through the ontic CLI, or as `ontic-pages ...` on its own.
-    # Run as `ontic pages ...` through the ontic CLI (in its process, or through uvx with
-    # ONTIC_PAGES_PROG set), or as `ontic-pages ...` on its own.
-    prog = os.environ.get("ONTIC_PAGES_PROG") or (
-        "ontic pages" if Path(sys.argv[0]).name == "ontic" else "ontic-pages"
-    )
+    prog = command_name()
     p = argparse.ArgumentParser(prog=prog, description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
     key = argparse.ArgumentParser(add_help=False)

@@ -299,7 +299,7 @@ def login_html(email: str, code: str, problem: str, assets: Assets) -> str:
     else:
         action = (
             f'<p>Your terminal shows a code ending in <b class="code">{e(code[-4:])}</b>. Allow '
-            "only if it matches and you just ran <code>ontic-pages login</code>.</p>\n"
+            "only if it matches and you just ran <code>ontic pages login</code>.</p>\n"
             f'<p><button id="allow" type="button" data-code="{e(code)}">Allow</button></p>\n'
             '<p id="result" role="status"></p>'
         )

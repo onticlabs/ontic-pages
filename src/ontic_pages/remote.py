@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import quote
 
-from .config import token_path
+from .config import command_name, token_path
 from .publish import collect, git_provenance
 
 POLL_SECONDS = 2.0
@@ -31,7 +31,10 @@ META_BYTES = 30_000  # description, --meta and git, in the first of them
 PARALLEL = 8
 ATTEMPTS = 3
 RETRY_SECONDS = 1.0
-NOT_SIGNED_IN = "not signed in, or the sign-in expired: run ontic-pages login"
+
+
+def not_signed_in() -> str:
+    return f"not signed in, or the sign-in expired: run {command_name()} login"
 
 
 def save_token(token: str, path: Path | None = None) -> None:
@@ -62,7 +65,7 @@ class Api:
         headers = {"Accept": "application/json"}
         if auth:
             if not self.token:
-                raise SystemExit(NOT_SIGNED_IN)
+                raise SystemExit(not_signed_in())
             headers["Authorization"] = f"Bearer {self.token}"
         data = None
         if body is not None:
@@ -86,7 +89,7 @@ class Api:
         """The answer of a call that must succeed; a clear SystemExit otherwise."""
         status, answer = self.call(method, path, body)
         if status == 401:
-            raise SystemExit(NOT_SIGNED_IN)
+            raise SystemExit(not_signed_in())
         if status >= 300:
             raise SystemExit(f"{answer.get('error') or 'failed'} (HTTP {status})")
         return answer
@@ -123,7 +126,7 @@ def login(api: Api, out=None) -> str:
         if status != 202:
             raise SystemExit(f"login failed: {answer.get('error') or status}")
         time.sleep(POLL_SECONDS)
-    raise SystemExit("no Allow within 5 minutes; run ontic-pages login again")
+    raise SystemExit(f"no Allow within 5 minutes; run {command_name()} login again")
 
 
 def batches(sizes: dict[str, int], first_extra: int) -> list[list[dict]]:

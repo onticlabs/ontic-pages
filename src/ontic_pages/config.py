@@ -75,6 +75,16 @@ def config_path() -> Path:
     return Path(base) / "ontic-pages" / "config.toml"
 
 
+def command_name() -> str:
+    """How the user runs this tool: `ontic pages` through the ontic CLI (in its process, or
+    through uvx with ONTIC_PAGES_PROG set), else `ontic-pages`. Used in help and messages."""
+    if os.environ.get("ONTIC_PAGES_PROG"):
+        return os.environ["ONTIC_PAGES_PROG"]
+    import sys
+
+    return "ontic pages" if Path(sys.argv[0]).name == "ontic" else "ontic-pages"
+
+
 def token_path() -> Path:
     """Where `ontic-pages login` keeps its token (mode 600)."""
     return config_path().parent / "token"
