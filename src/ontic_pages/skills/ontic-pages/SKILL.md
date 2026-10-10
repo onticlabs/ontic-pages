@@ -67,6 +67,9 @@ Either way, these differ from a claude.ai artifact:
    ```
 
    `--meta key=value` (repeatable) records what the page was made from. It is metadata only.
+   If the results come from an experiment tracked by the ontic CLI, always record its job id
+   (`--meta job=<job-id>`, as `ontic launch` or `ontic status` print it), plus the job ids or
+   registry names of the checkpoints and datasets it shows, so others can trace the page back.
 4. Give the user the printed link.
 
 ## Visibility
