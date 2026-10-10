@@ -101,7 +101,8 @@ it to see what is published now, for example after someone fixed text in the bro
 The owner of a page, looking at its current version in the bar, can fix its text right there:
 there is no Edit button, editing is always on for them. Every element that holds nothing but
 text (paragraphs, headings, list items, table cells, captions, ...) can be clicked into and typed
-over, with a text cursor and a light outline only while the pointer or the focus is on it.
+over. Nothing highlights it: the text looks exactly like the page, only the text cursor shows
+(the browser's focus ring is turned off on the text being edited).
 Interactive elements are never editable, nor anything inside them (links, buttons, `summary`,
 labels, form fields, elements with a `role` such as button or link, `onclick`, a `tabindex` (a
 container's `tabindex="-1"` aside), a pointer cursor, or the page's own `contenteditable`), so
@@ -112,8 +113,11 @@ The bar shows nothing about editing until a text changed; then "N changes", Save
 (its tooltip: "Text only. Saved as a new version; older versions stay in the title menu.").
 Discard asks first, in the bar. Cmd+S or Ctrl+S, in the page or the bar, saves; Escape in an
 edited text leaves it. Closing or reloading the tab with unsaved changes asks first. Comment mode
-pauses editing (a click makes a comment) and leaving it resumes. Save writes a new version and
-the page fades over to it; while there are unsaved changes, a version published meanwhile waits
+pauses editing (a click makes a comment) and leaving it resumes. Save shows "Saving..." at once
+and "Saved" once the gateway wrote the new version and made it current. The page is not loaded
+again (it shows that text already): the bar takes the new version as current and editing goes
+on from the saved text. Should a publish have made another version current during the save,
+that one fades in instead. While there are unsaved changes, a version published meanwhile waits
 until they are saved or discarded.
 
 The gateway finds each changed text in the HTML file's source (its text only, not tags, scripts,
@@ -126,6 +130,14 @@ every other file inside the bucket (server side), has the edited HTML file, and 
 with you as `published_by`, the old description, git and meta, plus `edited_from=<the version
 you edited>` in meta. So before publishing a page again from its source, check
 `ontic-pages info <name>` for `edited_from` and carry those edits over (`pull` it and compare).
+
+A save is quick: the gateway does not read again what it holds in memory (the edited version's
+`page.json`, file list and HTML), writes the edited file while it copies the others, and keeps
+what it wrote, so its answer and the next save read nothing more. Only `current` is always asked
+of the bucket, right before it is written. Each save logs one line with the time of each step
+(`journalctl -u pages-gateway | grep ' edit '`): lookup, patch, reserve (the new version id),
+copies, put (the edited file), commit (`current` checked, then `page.json` and `current`
+written), answer and total.
 
 ### Without the gateway: `--direct`
 
@@ -143,13 +155,17 @@ publish a page. Every command except `gateway` and `skill` copies it to
 exists (it is never created). Reinstalling the tool runs no code, so this keeps the skill current
 after an update. It prints one line to stderr on a first install and nothing otherwise.
 
-The installed copy has a marker line (an HTML comment) after the frontmatter. A copy with the
-marker is rewritten whenever it differs from the bundled text; delete the marker line to keep
-your own edits. A copy without it, or a symlinked `SKILL.md`, is left alone.
-`ONTIC_AGENT_SKILLS=0` turns the sync off.
+The installed copy has a marker line (an HTML comment) after the frontmatter, with the skill's
+revision number in it. A copy with the marker is rewritten when its revision is lower than this
+install's (or it has none, from before revisions), or when it has the same revision but other
+text. A copy with a higher revision came from a newer ontic-pages and is left alone, so an
+older install on the same machine never puts its older text back. Delete the marker line to
+keep your own edits. A copy without it, or a symlinked `SKILL.md`, is left alone.
+`ONTIC_AGENT_SKILLS=0` turns the sync off. Whoever changes `SKILL.md` bumps `skills.REVISION`
+(a test pins the text's hash to it).
 
 ```sh
-ontic-pages skill             # where it is installed and whether it is current
+ontic-pages skill             # where it is installed, its revision and whether it is current
 ontic-pages skill --install   # write ours, also over your own copy (never over a symlink)
 ontic-pages skill --print     # the bundled text
 ```

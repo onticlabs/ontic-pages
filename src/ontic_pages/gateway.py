@@ -73,6 +73,7 @@ from .cache import MB, FileCache, PageCache
 from .comments import Comments, listing
 from .comments import view as thread_view
 from .config import DEFAULT_URL
+from .edits import Phases
 from .edits import save as save_edits
 from .info import DESCRIPTION_CHARS, NAME_CHARS, details, history, info_html, short
 from .pull import presigned_files
@@ -816,7 +817,9 @@ def make_handler(gw: Gateway):
             })  # fmt: skip
 
         def save_edits(self, name: str, data):
-            """Text edited in the bar, as a new version (edits.py checks owner and version)."""
+            """Text edited in the bar, as a new version (edits.py checks owner and version). The
+            answer is built from what the save put in the caches; one log line times it."""
+            phases = Phases()
             found = self.api_page(name, required=True)
             if not found:
                 return
@@ -827,11 +830,13 @@ def make_handler(gw: Gateway):
                 raise Refused(403, "only the owner can edit this page")
             if not gw.limit.allow(email.lower()):
                 raise Refused(429, "too many changes, wait a minute")
-            page = save_edits(gw.store, name, email, data, gw.uploads)
-            gw.pages.forget(name)
+            phases.lap("lookup")
+            page = save_edits(gw.store, name, email, data, gw.uploads, gw.files, gw.pages, phases)
+            facts = gw.facts(name, email)
+            phases.lap("answer")
             edited = page["meta"]["edited_from"]
-            self.log_message("edit %s %s from %s", name, page["version"], edited)
-            self.send_json(200, {"version": page["version"], "page": gw.facts(name, email)})
+            self.log_message("edit %s %s from %s: %s", name, page["version"], edited, phases.line())
+            self.send_json(200, {"version": page["version"], "page": facts})
 
         # --- the content host ---------------------------------------------------------------
 
@@ -894,7 +899,9 @@ def make_handler(gw: Gateway):
                 is_html = headers["Content-Type"].startswith("text/html")
                 bridge = is_html and frame
                 etag = entry.etag
-                if bridge:  # rewritten HTML: its own ETag, and always revalidated
+                # Rewritten HTML: its own ETag, and always revalidated. The tag carries the
+                # version, which the file's ETag starts with, so the ETag changes with it.
+                if bridge:
                     etag = f'{etag[:-1]}-b{gw.assets.bridge_hash}"'
                     headers["Cache-Control"] = revalidate
                 headers["ETag"] = etag
@@ -911,7 +918,8 @@ def make_handler(gw: Gateway):
                     body = body or gw.store.get(key)["Body"]
                     data = body.read()
                 if bridge:
-                    return self.send_body(200, inject(data, gw.assets.bridge_tag), headers)
+                    tag = gw.assets.bridge_tag(version)
+                    return self.send_body(200, inject(data, tag), headers)
                 headers["Accept-Ranges"] = "bytes"
                 if data is not None:
                     return self.send_body(200, data, headers)

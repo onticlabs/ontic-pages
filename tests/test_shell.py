@@ -154,6 +154,24 @@ def test_bridge_only_in_framed_html(serve, two):
     assert body.startswith(TAG) and headers["Cache-Control"] == "private, no-cache"
 
 
+def test_bridge_tag_names_the_served_version(serve, store, two):
+    server = serve()
+    v1, v2 = two
+    _, current, body = content(server, "report", "/", headers=FRAME)
+    assert f'.js" data-version="{v2}"></script>'.encode() in body
+    _, old, body = content(server, "report", f"/_v/{v1}/", headers=FRAME)
+    assert f'data-version="{v1}"'.encode() in body
+    # The same address serving another version: another tag, and another ETag.
+    store.set_current("report", v1)
+    _, again, body = content(server, "report", "/", headers=FRAME)
+    assert f'data-version="{v1}"'.encode() in body
+    assert again["ETag"] != current["ETag"] and again["ETag"].startswith(f'"{v1}-')
+    status, _, _ = content(
+        server, "report", "/", headers={**FRAME, "If-None-Match": current["ETag"]}
+    )
+    assert status == 200  # not the copy cached while v2 was current
+
+
 def test_inject_places():
     tag = b"<s>"
     assert inject(b"<!DOCTYPE html><HTML lang=en><Head class=x><p>", tag) == (

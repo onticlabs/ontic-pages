@@ -3,11 +3,12 @@
 // tells it so (edit-mode), and the page makes its texts editable (edit-bridge.js). The bar shows
 // nothing about it until a text changed; then "N changes", Save and Discard (Discard asks here
 // first). Cmd/Ctrl+S, here or in the page, saves. Save collects the changes from the page and
-// sends them to the gateway, which writes a new version (edits.py); the bar's live update fades
-// it in. While there are unsaved changes a newly published version waits, and leaving the tab
-// asks first. Comment mode suspends editing in the page itself (it hears comment-mode too).
-// To the frame: edit-mode. From it: edit-state and edits. Everything shown is set with
-// textContent.
+// sends them to the gateway, which writes a new version (edits.py) and makes it current; the
+// frame shows that text already, so it stays (edit-mode {saved: true} makes it the page's new
+// original text) and only the bar's facts change. While there are unsaved changes a newly
+// published version waits, and leaving the tab asks first. Comment mode suspends editing in the
+// page itself (it hears comment-mode too). To the frame: edit-mode. From it: edit-state and
+// edits. Everything shown is set with textContent.
 (function () {
   "use strict";
   var bar = window.onticBar;
@@ -17,6 +18,7 @@
   var state = "idle"; // idle, confirm (asking before Discard), saving (asked the page), posting
   var changes = 0;
   var version = null; // the version the page in the frame shows
+  var doc = 0; // counts the documents loaded in the frame: a save's answer is for its own
   var timer = 0;
   var ui = null;
 
@@ -72,14 +74,19 @@
     draw();
   }
 
-  // A page loaded in the frame: editing starts there, with nothing changed yet.
-  function start() {
+  // A page loaded in the frame: editing starts there, with nothing changed yet. It is labelled
+  // with the version it says it was served from (bridge.js), never assumed to be the current
+  // one: a reload during a save may have fetched the version before it.
+  function start(served) {
     var lost = changes > 0 && !busy();
+    doc += 1;
     clearTimeout(timer);
     state = "idle";
     changes = 0;
-    version = bar.page().current;
-    if (allowed()) post({ ontic: "edit-mode", on: true });
+    version = typeof served === "string" && /^\d{8}T\d{6}Z$/.test(served)
+      ? served : bar.page().current;
+    // An older version than the current one is not edited (the bar loads the current one).
+    if (allowed() && version === bar.page().current) post({ ontic: "edit-mode", on: true });
     show(lost ? "The page reloaded; unsaved changes are gone." : "", false);
   }
 
@@ -127,14 +134,33 @@
     show(error, false);
   }
 
-  function saved(next) {
+  // The gateway wrote the new version (answer: {version, page}). The frame shows its text
+  // already, so it is not loaded again: the bar takes it as current, and the page's texts as
+  // they are now become the originals that further edits are counted against. Should a publish
+  // have made another version current meanwhile, that one fades in instead.
+  function saved(answer) {
+    var next = answer.page;
     state = "idle";
     changes = 0;
     show("", false);
     ui.done.hidden = false;
     draw();
     setTimeout(function () { ui.done.hidden = true; draw(); }, 2500);
-    bar.update(next); // the new current version fades in
+    bar.adopt(next);
+    if (next.current === answer.version && !bar.view.version) {
+      version = answer.version;
+      post({ ontic: "edit-mode", on: true, saved: true });
+    } else {
+      settled();
+    }
+  }
+
+  // A save's answer after another document loaded in the frame (a reload, a link): that
+  // document's edits and count are its own and stay as they are. The committed version only
+  // goes into the bar's facts; it fades in once nothing unsaved holds the frame.
+  function savedElsewhere(answer) {
+    bar.adopt(answer.page);
+    if (!unsaved()) settled();
   }
 
   function send(message) {
@@ -153,6 +179,7 @@
     }
     state = "posting"; // another answer from the page is not sent again
     var name = bar.page().name;
+    var mine = doc;
     fetch("/_api/pages/" + encodeURIComponent(name) + "/edits", {
       method: "POST",
       credentials: "same-origin",
@@ -161,10 +188,17 @@
     }).then(function (response) {
       return response.json().then(function (body) { return { ok: response.ok, body: body }; });
     }).then(function (result) {
-      if (result.ok && result.body && result.body.page) saved(result.body.page);
-      else failed((result.body && result.body.error) || "Could not save.");
+      var body = result.body;
+      var ok = result.ok && body && body.page && typeof body.version === "string";
+      if (mine !== doc) {
+        if (ok) savedElsewhere(body);
+      } else if (ok) {
+        saved(body);
+      } else {
+        failed((body && body.error) || "Could not save.");
+      }
     }, function () {
-      failed("Could not reach the server; try Save again.");
+      if (mine === doc) failed("Could not reach the server; try Save again.");
     });
   }
 
@@ -189,7 +223,7 @@
   bar.add({
     message: function (msg) {
       if (msg.ontic === "ready") {
-        start();
+        start(msg.version);
       } else if (msg.ontic === "edit-state" && allowed() && !busy()) {
         changed(msg.changes);
         if (msg.save === true) save();

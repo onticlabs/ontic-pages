@@ -28,7 +28,9 @@
   // Features in files of their own (details.js, edit.js, served after this one) hook in here:
   // message(msg) for each message from the frame, render() after the bar is drawn, opened(id)
   // when a menu or panel opens, holds() true to keep a new version from fading in over unsaved
-  // work. The page in the frame cannot reach this object.
+  // work. update(facts) draws new page facts and fades in a new current version; adopt(facts)
+  // only draws them (the frame shows their current version already). The page in the frame
+  // cannot reach this object.
   var features = [];
   window.onticBar = {
     add: function (feature) { features.push(feature); },
@@ -37,6 +39,7 @@
     origin: origin,
     frame: frame,
     update: function (next) { update(next); },
+    adopt: function (next) { adopt(next); },
     swap: function () { swap(); },
     close: function () { closeAll(); },
     open: function (panelId) { openPop(panelId); },
@@ -93,6 +96,7 @@
     switch (msg.ontic) {
       case "ready":
         if (!fromPending) reveal();
+        behind(msg.version);
         break;
       case "nav":
         if (fromFrame && typeof msg.path === "string" && typeof msg.title === "string") {
@@ -111,6 +115,19 @@
       // Comments (comments.js) and edit text in place (edit.js) handle their own types.
     }
   });
+
+  // A page that says it was served from another version than the current one (fetched before a
+  // save or a publish made a new one current) is replaced by the current one, unless a feature
+  // holds the frame; once per current version, so a lagging server cannot make it loop.
+  var VERSION_ID = /^\d{8}T\d{6}Z$/;
+  var replacedFor = null;
+  function behind(version) {
+    if (view.version || typeof version !== "string" || !VERSION_ID.test(version)) return;
+    if (version === page.current || replacedFor === page.current) return;
+    if (features.some(function (f) { return f.holds && f.holds(); })) return;
+    replacedFor = page.current;
+    swap();
+  }
 
   function onNav(p, title) {
     if (p.charAt(0) !== "/" || p.charAt(1) === "/" || p.length > 4096) return;
@@ -298,20 +315,36 @@
   function refresh() {
     if (document.visibilityState !== "visible" || Date.now() - lastFetch < 2000) return;
     lastFetch = Date.now();
+    var asked = generation;
     fetch("/_api/pages/" + encodeURIComponent(name), { credentials: "same-origin", cache: "no-store" })
       .then(function (response) { return response.ok ? response.json() : null; })
-      .then(update, function () { /* offline: try again later */ });
+      .then(function (next) {
+        if (asked === generation) update(next);
+      }, function () { /* offline: try again later */ });
   }
+
+  var generation = 0; // adopt() counts up: polls asked before it answer with older facts
+  function valid(next) { return next && next.name === name && Array.isArray(next.versions); }
 
   // New page facts: draw them, and fade in a new current version unless a feature holds the
   // frame (unsaved edits in it).
   function update(next) {
-    if (!next || next.name !== name || !Array.isArray(next.versions)) return;
+    if (!valid(next)) return;
     var changed = next.current !== page.current;
     page = next;
     render();
     var held = features.some(function (f) { return f.holds && f.holds(); });
     if (changed && !view.version && !held) swap();
+  }
+
+  // New page facts whose current version the frame shows already (an edit saved from the text
+  // on screen): drawn, never faded in. Since they are now page.current, a poll that brings the
+  // same version changes nothing, and a poll asked before them is dropped.
+  function adopt(next) {
+    if (!valid(next)) return;
+    generation += 1;
+    page = next;
+    render();
   }
 
   function swap() {

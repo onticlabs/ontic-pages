@@ -5,12 +5,20 @@
 // to scroll back after a new version loads. A plain click on a link to the apex (another page, the
 // listing) is handed to the bar, which opens it in the whole tab: the apex refuses to be framed.
 // It posts to exactly one origin (the apex, written in by the gateway) and accepts messages only
-// from that origin and the parent window.
+// from that origin and the parent window. Its ready and nav messages carry the version this page
+// was served from (data-version on the script tag, written by the gateway), so the bar knows
+// what the frame shows even when a save or a publish changed the current version meanwhile.
 // Every message is {ontic: "<type>", ...}; later types (comment pins, edit mode) go here too.
 (function () {
   "use strict";
   var APEX = __APEX__;
   if (window.parent === window || window.parent !== window.top) return;
+  var VERSION = "";
+  try {
+    var tag = document.currentScript;
+    var served = tag && tag.getAttribute("data-version");
+    if (served && /^\d{8}T\d{6}Z$/.test(served)) VERSION = served;
+  } catch (error) { /* no current script: the bar falls back to the current version */ }
 
   function send(message) {
     try {
@@ -24,11 +32,11 @@
     var title = document.title || "";
     if (path + "\n" + title === last) return;
     last = path + "\n" + title;
-    send({ ontic: "nav", path: path, title: title });
+    send({ ontic: "nav", path: path, title: title, version: VERSION });
   }
 
   function ready() {
-    send({ ontic: "ready" });
+    send({ ontic: "ready", version: VERSION });
     nav();
     var title = document.querySelector("title");
     if (title && window.MutationObserver) {

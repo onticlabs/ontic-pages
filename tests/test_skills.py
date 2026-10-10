@@ -1,13 +1,22 @@
+import hashlib
 import os
 import stat
 
 import pytest
 
 from ontic_pages import cli, skills
-from ontic_pages.skills import CLI_MARKER, MARKER
+from ontic_pages.skills import CLI_MARKER, MARKER, REVISION
 
 TEXT = skills.bundled()
 WANTED = skills.installed_text(TEXT)
+# The marker every ontic-pages wrote before skill revisions.
+OLD_MARKER = (
+    "<!-- managed by ontic-pages: updated on every run; delete this line to keep your own "
+    "edits, ONTIC_AGENT_SKILLS=0 to stop -->"
+)
+# SKILL.md as of skills.REVISION. When the text changes, bump the revision with it.
+SKILL_SHA256 = "269128e7eda9a6154c2fe1bbbd47638a42117b9b846a25039bc98b9b9cd34ffb"
+SKILL_REVISION = 3
 
 
 @pytest.fixture
@@ -207,7 +216,10 @@ def test_skill_status_states(home, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "no-codex"))
     cli.main(["skill"])
     out = capsys.readouterr().out
-    assert f"\n  {skills.CURRENT}\n" in out
+    assert (
+        f"\n  {skills.CURRENT}; installed skill revision {REVISION}, this install {REVISION}\n"
+        in out
+    )
     assert f"\n  {skills.NO_AGENT}\n" in out
     monkeypatch.setenv("ONTIC_AGENT_SKILLS", "0")
     cli.main(["skill"])
@@ -221,7 +233,10 @@ def test_skill_outdated_and_symlink(home, tmp_path, capsys):
     skill_file(home / ".codex").symlink_to(tmp_path / "elsewhere.md")
     cli.main(["skill"])
     out = capsys.readouterr().out
-    assert f"\n  {skills.OUTDATED}\n" in out
+    assert (
+        f"\n  {skills.OUTDATED}; installed copy has no skill revision, this install {REVISION}\n"
+        in out
+    )
     assert f"\n  {skills.SYMLINK}\n" in out
 
 
@@ -239,6 +254,76 @@ def test_skill_install(home, tmp_path, capsys):
     assert (tmp_path / "elsewhere.md").read_text() == "linked\n"
     assert f"Claude Code: {claude}\n  installed\n" in out
     assert f"\n  {skills.SYMLINK}\n" in out
+
+
+def test_revision_is_bumped_with_the_text():
+    digest = hashlib.sha256(TEXT.encode("utf-8")).hexdigest()
+    assert (digest, REVISION) == (SKILL_SHA256, SKILL_REVISION), (
+        "SKILL.md changed: bump skills.REVISION and update this hash"
+    )
+
+
+def test_marker_carries_the_revision():
+    assert f"(skill revision {REVISION})" in MARKER
+    assert skills.revision(WANTED) == REVISION
+    assert skills.revision(f"---\n---\n{OLD_MARKER}\nold\n") == 0  # ours, before revisions
+    assert skills.revision(f"{CLI_MARKER}\nold\n") == 0
+    assert skills.revision("my own notes\n") is None
+    assert OLD_MARKER not in WANTED  # older installs leave a revised copy alone
+
+
+def with_revision(revision, body="# Other text\n"):
+    marker = MARKER.replace(f"(skill revision {REVISION})", f"(skill revision {revision})")
+    return f"---\nname: ontic-pages\n---\n{marker}\n{body}"
+
+
+def test_newer_revision_is_left_alone(home, capsys):
+    target = skill_file(home / ".claude")
+    target.parent.mkdir(parents=True)
+    target.write_text(with_revision(REVISION + 1))
+    _, err = run_url(capsys)
+    assert target.read_text() == with_revision(REVISION + 1)  # never back to older text
+    assert skill_file(home / ".codex").read_text() == WANTED
+    cli.main(["skill"])
+    out = capsys.readouterr().out
+    assert f"This install has skill revision {REVISION}.\n" in out
+    assert (
+        f"Claude Code: {target}\n  {skills.NEWER}; installed skill revision {REVISION + 1}, "
+        f"this install {REVISION}\n"
+    ) in out
+    cli.main(["skill", "--install"])  # forced: ours goes over it
+    assert target.read_text() == WANTED
+
+
+@pytest.mark.parametrize(
+    "installed",
+    [
+        with_revision(REVISION - 1),  # lower
+        with_revision(REVISION),  # the same revision, other text
+        f"---\nname: ontic-pages\n---\n{OLD_MARKER}\nold\n",  # before revisions
+        f"{CLI_MARKER}\nold\n",
+    ],
+)
+def test_older_or_changed_copies_are_rewritten(home, capsys, installed):
+    target = skill_file(home / ".claude")
+    target.parent.mkdir(parents=True)
+    target.write_text(installed)
+    _, err = run_url(capsys)
+    assert target.read_text() == WANTED
+    assert str(target) not in err  # an update, not a first install: quiet
+
+
+def test_skill_status_revisions(home, capsys):
+    skill_file(home / ".claude").parent.mkdir(parents=True)
+    skill_file(home / ".claude").write_text(with_revision(REVISION - 1))
+    skill_file(home / ".codex").parent.mkdir(parents=True)
+    skill_file(home / ".codex").write_text(f"{OLD_MARKER}\nold\n")
+    cli.main(["skill"])
+    out = capsys.readouterr().out
+    lower = f"installed skill revision {REVISION - 1}, this install {REVISION}"
+    assert f"\n  {skills.OUTDATED}; {lower}\n" in out
+    none = f"installed copy has no skill revision, this install {REVISION}"
+    assert f"\n  {skills.OUTDATED}; {none}\n" in out
 
 
 def test_skill_print(home, capsys):

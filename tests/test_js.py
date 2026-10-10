@@ -101,6 +101,33 @@ def test_bridge_hands_apex_links_to_the_bar():
     assert results[8] == {"prevented": True, "posted": []}  # the page handled it
 
 
+READY = """
+const vm = require("vm");
+const posted = [];
+const parent = { postMessage: (message, origin) => posted.push([message, origin]) };
+const window = { parent, top: parent, scrollY: 0, addEventListener() {} };
+const location = new URL(CONTENT + "/a/b.html");
+const currentScript = { getAttribute: (k) => (k === "data-version" ? SERVED : null) };
+const document = { readyState: "complete", title: "t", querySelector: () => null,
+  addEventListener() {}, currentScript };
+vm.runInNewContext(SOURCE, { window, document, location, history: {}, URL, setTimeout });
+console.log(JSON.stringify(posted));
+"""
+
+
+@pytest.mark.parametrize(
+    "served, said",
+    [("20261010T120000Z", "20261010T120000Z"), ('x"><script>', ""), (None, "")],
+)
+def test_bridge_says_which_version_it_was_served_from(served, said):
+    source = (STATIC / "bridge.js").read_text().replace("__APEX__", json.dumps(APEX))
+    posted = run(f"const SERVED = {json.dumps(served)};\n" + READY, source)
+    assert posted == [
+        [{"ontic": "ready", "version": said}, APEX],
+        [{"ontic": "nav", "path": "/a/b.html", "title": "t", "version": said}, APEX],
+    ]
+
+
 def test_bar_opens_only_its_own_origin():
     results = run(BAR, (STATIC / "bar.js").read_text())
     assert results == [[f"{APEX}/other/?a=1#b"], [], [], [], [], []]

@@ -3,17 +3,20 @@
 //
 // For the page's owner on the current version the bar turns editing on as the page loads, and
 // it stays on: an element whose children are all text (paragraphs, headings, list items, cells,
-// ...) becomes editable as plain text when the pointer comes onto it, with a subtle outline
-// only while hovered or focused. Never one that is or sits inside something interactive (links,
-// buttons, form fields, the page's own editors, elements with a role, a tabindex, onclick or a
-// pointer cursor), nor inside scripts, styles, svg, canvas or templates: those keep working as
-// the page made them. A text counts as changed only after an `input` event in it, so text the
+// ...) becomes editable as plain text when the pointer comes onto it. Nothing marks it: no
+// outline on hover, and the browser's focus ring is turned off while it is focused, so the text
+// looks exactly like the page and only the text cursor shows. Never one that is or sits inside
+// something interactive (links, buttons, form fields, the page's own editors, elements with a
+// role, a tabindex, onclick or a pointer cursor), nor inside scripts, styles, svg, canvas or
+// templates: those keep working as the page made them. A text counts as changed only after an `input` event in it, so text the
 // page's own scripts update is never counted.
 //
 // From the bar: edit-mode {on} turns editing on or off (the changes so far stay; while comment
 // mode is on, editing is suspended as well), {discard: true} first puts every original text
 // back, {on: false, save: true} answers edits {path, changes: [{before, after}]} and stops
-// editing, leaving the new text on screen until the saved version replaces this page. To the
+// editing, leaving the new text on screen; {on: true, saved: true} after the save makes that
+// text the original (the count goes to 0, nothing reloads; only in the page that sent the
+// edits) and editing goes on. To the
 // bar: edit-state {changes} whenever the count changes or editing starts, with save: true for
 // Cmd/Ctrl+S in the page.
 (function () {
@@ -35,13 +38,13 @@
   var ROLES = new RegExp("^(button|link|checkbox|radio|switch|tab|menuitem|menuitemcheckbox|" +
     "menuitemradio|option|combobox|textbox|slider|spinbutton|treeitem)$");
   var MAX_CHANGES = 500, MAX_TEXT = 20000, MAX_BYTES = 60000; // the gateway's limits
-  var HOVER = "1px solid rgba(47, 91, 211, .45)", FOCUS = "2px solid rgba(47, 91, 211, .85)";
 
-  var items = []; // {el, before, outline, offset, touched}: kept until a discard or a new page
+  var items = []; // {el, before, outline, touched}: kept until a discard or a new page
   var enabled = false; // the bar said on
   var commenting = false; // comment mode: clicks make comments, nothing is editable
   var mode = "";
   var sent = -1; // the count last told to the bar
+  var answered = false; // this page sent its edits for a save; the bar has not said back yet
 
   function send(message) {
     try {
@@ -123,17 +126,23 @@
     var it = item(el);
     if (!it) {
       if (!eligible(el)) return null;
-      it = { el: el, before: el.textContent, outline: el.style.outline,
-             offset: el.style.outlineOffset, touched: false };
+      it = { el: el, before: el.textContent, outline: null, touched: false };
       items.push(it);
     }
     if (it.el.getAttribute("contenteditable") === null) editable(it, true);
     return it;
   }
 
-  function look(it, outline) {
-    it.el.style.outline = outline === null ? it.outline : outline;
-    it.el.style.outlineOffset = outline === null ? it.offset : "2px";
+  // No focus ring on the text being edited (browsers draw one on anything editable); the
+  // page's own outline comes back when it loses focus.
+  function quiet(it, on) {
+    if (on && it.outline === null) {
+      it.outline = it.el.style.outline;
+      it.el.style.outline = "none";
+    } else if (!on && it.outline !== null) {
+      it.el.style.outline = it.outline;
+      it.outline = null;
+    }
   }
 
   // What the element says now. Browsers type a no-break space for a trailing or double space;
@@ -165,7 +174,7 @@
     var focused = document.activeElement;
     if (!on && focused && item(focused) && focused.blur) focused.blur();
     items = items.filter(function (it) {
-      look(it, null);
+      quiet(it, false);
       editable(it, on);
       return on || it.touched;
     });
@@ -198,11 +207,22 @@
 
   function discard() {
     items.forEach(function (it) {
-      look(it, null);
+      quiet(it, false);
       editable(it, false);
       if (it.touched && it.el.textContent !== it.before) it.el.textContent = it.before;
     });
     items = [];
+  }
+
+  // Saved: the text on screen is the page's text now, and further edits count against it. A
+  // no-break space the browser typed is the plain one that was saved.
+  function rebase() {
+    items.forEach(function (it) {
+      var text = now(it);
+      if (it.el.textContent !== text) it.el.textContent = text;
+      it.before = text;
+      it.touched = false;
+    });
   }
 
   window.addEventListener("message", function (event) {
@@ -216,6 +236,9 @@
     }
     if (message.ontic !== "edit-mode") return;
     if (message.discard === true) discard();
+    // Only the edits this very page sent can have been saved.
+    if (message.saved === true && answered) rebase();
+    answered = message.save === true;
     if (message.save === true) {
       send(edits());
       enabled = false;
@@ -228,21 +251,15 @@
   });
 
   window.addEventListener("pointerover", function (event) {
-    if (!active()) return;
-    var it = adopt(event.target);
-    if (it && document.activeElement !== it.el) look(it, HOVER);
-  }, true);
-  window.addEventListener("pointerout", function (event) {
-    var it = item(event.target);
-    if (it && document.activeElement !== it.el) look(it, null);
+    if (active()) adopt(event.target);
   }, true);
   window.addEventListener("focusin", function (event) {
     var it = active() && item(event.target);
-    if (it) look(it, FOCUS);
+    if (it) quiet(it, true);
   }, true);
   window.addEventListener("focusout", function (event) {
     var it = item(event.target);
-    if (it) look(it, null);
+    if (it) quiet(it, false);
   }, true);
 
   // The text as the user is about to change it, should a script have changed it meanwhile.

@@ -28,7 +28,7 @@ class FakeS3:
         self.calls.append("put_object")
         data = Body if isinstance(Body, bytes) else Body.read()
         self.objects[(Bucket, Key)] = (data, ContentType)
-        return {}
+        return {"ETag": _etag(data)}
 
     def copy_object(self, Bucket, Key, CopySource, ContentType=None, MetadataDirective=None):
         self.calls.append("copy_object")
@@ -37,7 +37,7 @@ class FakeS3:
             raise _error("NoSuchKey", "CopyObject")
         data, ctype = self.objects[src]
         self.objects[(Bucket, Key)] = (data, ContentType or ctype)
-        return {}
+        return {"CopyObjectResult": {"ETag": _etag(data)}}
 
     def head_object(self, Bucket, Key):
         self.calls.append("head_object")

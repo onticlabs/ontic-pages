@@ -99,11 +99,13 @@ class Store:
     def key(self, *parts: str) -> str:
         return self.prefix + "/".join(parts)
 
-    def put(self, key: str, body) -> None:
-        """Body is bytes or an open binary file."""
-        self.client.put_object(
+    def put(self, key: str, body) -> str:
+        """Body is bytes or an open binary file. Returns the new object's ETag, unquoted (empty
+        when the store sends none)."""
+        resp = self.client.put_object(
             Bucket=self.bucket, Key=key, Body=body, ContentType=content_type(key)
         )
+        return (resp.get("ETag") or "").strip('"')
 
     def get(self, key: str, range_header: str | None = None) -> dict | None:
         """The raw get_object response, or None when the key does not exist."""
@@ -132,11 +134,13 @@ class Store:
             "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=seconds
         )
 
-    def copy(self, src: str, dst: str) -> None:
-        """A server-side copy within the bucket (the bytes stay in the store), with its type."""
-        self.client.copy_object(
+    def copy(self, src: str, dst: str) -> str:
+        """A server-side copy within the bucket (the bytes stay in the store), with its type.
+        Returns the copy's ETag, unquoted (empty when the store sends none)."""
+        resp = self.client.copy_object(
             Bucket=self.bucket, Key=dst, CopySource={"Bucket": self.bucket, "Key": src}
         )
+        return ((resp.get("CopyObjectResult") or {}).get("ETag") or "").strip('"')
 
     def sizes(self, prefix: str) -> dict[str, int]:
         """Key (below prefix) -> size, for every object under prefix."""
