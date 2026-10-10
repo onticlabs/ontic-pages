@@ -1,14 +1,16 @@
 """Text edited in the bar: finding it in the source, and saving it as a new version."""
 
 import json
+import re
 from datetime import UTC, datetime
 
 import pytest
-from helpers import ORIGIN, request
+from helpers import FRAME, ORIGIN, content, request
 
 from ontic_pages import edits
-from ontic_pages.edits import STALE, check, patch, save, text_spans
-from ontic_pages.publish import publish
+from ontic_pages.cache import FileCache, PageCache
+from ontic_pages.edits import STALE, Phases, check, patch, save, text_spans
+from ontic_pages.publish import page_json, publish
 from ontic_pages.uploads import Refused, Uploads
 
 T1 = datetime(2026, 10, 7, 15, 30, tzinfo=UTC)
@@ -269,3 +271,153 @@ def test_gateway_edits_body_limit(serve, store, page):
     assert post(server, big)[0] == 200  # over the 4 KB of other writes, under Caddy's 64 KB
     huge = body(page, *[change(f"t{i}", "y" * 9_000) for i in range(8)])
     assert post(server, huge)[0] == 413
+
+
+# --- quick: the caches --------------------------------------------------------------------
+
+
+def caches(store, ttl=60.0, **sizes):
+    files = FileCache(store, **sizes)
+    return files, PageCache(store, files, ttl)
+
+
+def warm(files, pages, page):
+    """What a gateway holds after showing the page: its state, versions and files."""
+    pages.get("report")
+    pages.versions("report")
+    for path in ("index.html", "style.css", "app.js", "data.json", "img/dot.png"):
+        files.get("report", page["version"], path)
+
+
+def test_save_reads_only_current_when_cached(store, s3, page):
+    files, pages = caches(store)
+    warm(files, pages, page)
+    s3.calls.clear()
+    edit = body(page, change("Results", "Findings"))
+    new = save(store, "report", OWNER, edit, None, files, pages)
+    # The new version id (a HEAD), the old version's file list (once), the files written at
+    # once, `current` asked again, then page.json and `current` written.
+    assert sorted(s3.calls) == sorted(
+        ["head_object", "list_objects_v2", "put_object"] + ["copy_object"] * 5
+        + ["get_object", "put_object", "put_object"]
+    )  # fmt: skip
+    assert s3.calls[-3:] == ["get_object", "put_object", "put_object"]
+    # The next save reads nothing but `current`: the new version is in the caches already.
+    s3.calls.clear()
+    edit = body(new, change("Findings", "Results"))
+    again = save(store, "report", OWNER, edit, None, files, pages)
+    assert s3.calls.count("get_object") == 1 and "list_objects_v2" not in s3.calls
+    assert again["meta"]["edited_from"] == new["version"]
+    # The page's state as written: no reads for it either.
+    s3.calls.clear()
+    owner = OWNER
+    assert pages.get("report") == (again["version"], "ontic", owner)
+    assert pages.versions("report") == [page["version"], new["version"], again["version"]]
+    assert files.meta("report", again["version"]) == again
+    assert s3.calls == []
+
+
+def test_saved_version_is_kept_with_the_buckets_etags(store, s3, page):
+    files, pages = caches(store)
+    warm(files, pages, page)
+    edit = body(page, change("Results", "Findings"))
+    new = save(store, "report", OWNER, edit, None, files, pages)
+    version = new["version"]
+    cold = FileCache(store)  # what a gateway that read the new version from the bucket holds
+    for path in ("index.html", "page.json", "style.css", "app.js", "data.json", "img/dot.png"):
+        kept, fresh = files.peek("report", version, path), cold.get("report", version, path)[0]
+        assert kept == fresh, path
+    # Never the old version's HTML or page.json; the patched file and the new page.json.
+    assert (
+        files.peek("report", version, "index.html").data
+        == PAGE.replace("<h1>Results", "<h1>Findings").encode()
+    )
+    assert files.peek("report", version, "page.json").data == page_json(new)
+    assert files.peek("report", version, "docs/index.html") is None  # not kept before: not now
+    assert files.listing("report", version) == store.sizes(f"report/{version}/")
+
+
+def test_seeding_when_copies_send_no_etag(store, s3, page):
+    files, pages = caches(store)
+    warm(files, pages, page)
+    copy = s3.copy_object
+    s3.copy_object = lambda **kwargs: copy(**kwargs) and {}  # some stores answer without one
+    edit = body(page, change("Results", "Findings"))
+    new = save(store, "report", OWNER, edit, None, files, pages)
+    cold = FileCache(store)
+    for path in ("style.css", "img/dot.png"):  # the old file's ETag, under the new version
+        kept = files.peek("report", new["version"], path)
+        assert kept == cold.get("report", new["version"], path)[0]
+        assert kept.etag.startswith(f'"{new["version"]}-')
+
+
+def test_seeding_keeps_to_the_cache_limits(store, s3, page):
+    files, pages = caches(store, max_bytes=1500, max_file=1000)
+    warm(files, pages, page)
+    long = change("Results", "Findings " + "x" * 1000)
+    new = save(store, "report", OWNER, body(page, long), None, files, pages)
+    html = files.peek("report", new["version"], "index.html")
+    assert html.data is None and html.size > 1000  # over the per-file cap: size and ETag only
+    assert html.etag == FileCache(store).get("report", new["version"], "index.html")[0].etag
+    assert files.total == sum(len(f.data or b"") for f in files.files.values()) <= 1500
+    assert files.peek("report", new["version"], "page.json") is not None
+
+
+def test_save_with_a_cache_behind(store, site, page):
+    files, pages = caches(store)
+    warm(files, pages, page)
+    newer = publish(store, site, "report", "newer", published_by=OWNER)
+    # The kept current version is the old one; the bucket says the bar's version is current.
+    saved = save(store, "report", OWNER, body(newer, change("Results", "x")), None, files, pages)
+    assert store.current("report") == saved["version"]
+    with pytest.raises(Refused) as err:  # and the other way round: the bucket decides
+        save(store, "report", OWNER, body(page, change("Results", "x")), None, files, pages)
+    assert err.value.status == 409
+
+
+def test_publish_during_the_save_wins(store, site, s3, page, monkeypatch):
+    files, pages = caches(store)
+    warm(files, pages, page)
+    uploads = Uploads(store)
+    real = store.put
+    raced = []
+
+    def put(key, data):
+        if key.endswith("/index.html") and not raced:  # while the files are written
+            raced.append(None)
+            raced[0] = publish(store, site, "report", "raced", published_by=OWNER)
+        return real(key, data)
+
+    monkeypatch.setattr(store, "put", put)
+    with pytest.raises(Refused) as err:
+        save(store, "report", OWNER, body(page, change("Results", "x")), uploads, files, pages)
+    assert (err.value.status, err.value.message) == (409, STALE)
+    assert store.current("report") == raced[0]["version"]
+    assert pages.get("report")[0] == raced[0]["version"]  # the kept state was dropped
+    assert uploads.reserved == set()
+
+
+def test_phases():
+    phases = Phases()
+    phases.lap("lookup")
+    phases.took("copies", 0.25)
+    phases.skip()
+    line = phases.line()
+    assert re.fullmatch(r"lookup \d+ ms, copies 250 ms, total \d+ ms", line)
+
+
+def test_gateway_logs_the_time_of_each_step(serve, store, page, capsys):
+    server = serve(ttl=60)
+    assert request(server, "/_api/pages/report", who=OWNER)[0] == 200
+    assert content(server, "report", "/", who=OWNER, headers=FRAME)[0] == 200
+    status, answer = post(server, body(page, change("Results", "Findings")))
+    assert status == 200
+    line = [x for x in capsys.readouterr().err.splitlines() if " edit report " in x]
+    assert len(line) == 1
+    steps = r"lookup \d+ ms, patch \d+ ms, reserve \d+ ms, copies \d+ ms, put \d+ ms, "
+    steps += r"commit \d+ ms, answer \d+ ms, total \d+ ms"
+    expected = f"{OWNER} edit report {answer['version']} from {page['version']}: {steps}"
+    assert re.search(expected, line[0])
+    # The page shows the new version at once, from what the save kept.
+    status, _, html = content(server, "report", "/", who=OWNER, headers=FRAME)
+    assert status == 200 and b"<h1>Findings</h1>" in html

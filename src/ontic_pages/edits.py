@@ -10,9 +10,14 @@ saved and the answer names each change that could not be placed. Only the part t
 replaced, html-escaped.
 
 The new version is the old one with that one file patched: every other file is copied inside the
-bucket (copy_object; the bytes never pass through the gateway), the patched file is written by the
-gateway (it is small), then page.json (published_by is the editor, the old description and meta
-plus edited_from=<old version>, the old git), then `current`, as publish.py does.
+bucket (copy_object; the bytes never pass through the gateway) while the gateway writes the
+patched file (it is small), then page.json (published_by is the editor, the old description and
+meta plus edited_from=<old version>, the old git), then `current`, as publish.py does.
+
+It is quick: what the gateway keeps of the old version (page.json, its file list, the HTML it
+served) is not read again, and what was written goes into those caches, so the answer and the
+next save read nothing more. Only `current` is always asked of the bucket before it is written.
+The time of each step goes into one log line per save.
 """
 
 from __future__ import annotations
@@ -20,13 +25,15 @@ from __future__ import annotations
 import html
 import re
 import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from html.entities import html5
 from html.parser import HTMLParser
 from urllib.parse import unquote
 
-from .publish import META_FILE, check_paths, finish, new_version, page_record
+from .cache import FileCache, PageCache
+from .publish import META_FILE, check_paths, finish, new_version, page_json, page_record
 from .store import VERSION_RE, Store
 from .uploads import Refused, Uploads
 
@@ -235,49 +242,141 @@ def check(body) -> tuple[str, str, list[dict]]:
     return version, rel, out
 
 
-def save(store: Store, name: str, who: str, body, uploads: Uploads | None = None) -> dict:
+class Phases:
+    """How long each step of one save took, for one log line."""
+
+    def __init__(self):
+        self.start = self.mark = time.monotonic()
+        self.ms: dict[str, float] = {}
+
+    def lap(self, phase: str) -> None:
+        """The time since the last lap (or skip) goes to `phase`."""
+        now = time.monotonic()
+        self.ms[phase] = self.ms.get(phase, 0.0) + (now - self.mark) * 1000
+        self.mark = now
+
+    def took(self, phase: str, seconds: float) -> None:
+        self.ms[phase] = seconds * 1000
+
+    def skip(self) -> None:
+        """The time since the last lap is in no phase (it was recorded with took)."""
+        self.mark = time.monotonic()
+
+    def line(self) -> str:
+        total = (time.monotonic() - self.start) * 1000
+        parts = [f"{k} {v:.0f} ms" for k, v in self.ms.items()]
+        return ", ".join([*parts, f"total {total:.0f} ms"])
+
+
+def _timed(start: float, call, *args):
+    """call(*args), and the seconds from `start` until it returned."""
+    out = call(*args)
+    return out, time.monotonic() - start
+
+
+def save(
+    store: Store,
+    name: str,
+    who: str,
+    body,
+    uploads: Uploads | None = None,
+    files: FileCache | None = None,
+    pages: PageCache | None = None,
+    phases: Phases | None = None,
+) -> dict:
     """Write the edited page as a new version and make it current. Returns its page.json.
-    `uploads` reserves the version id against publishes under way."""
+    `uploads` reserves the version id against publishes under way. `files` and `pages` are the
+    gateway's caches: what they hold (the old version's page.json, file list and HTML, the
+    page's state) is not read again, and what was written goes into them. `phases` gets the
+    time of each step."""
     version, rel, changes = check(body)
-    with page_lock(name):
-        current = store.current(name)
+    files = files or FileCache(store)
+    phases = phases or Phases()
+    with page_lock(name), ThreadPoolExecutor(COPY_THREADS) as pool:
+        # The kept current version may be a few seconds old: ask the bucket unless it agrees
+        # (and it is asked again right before `current` is written).
+        current, visibility, _ = pages.get(name) if pages else (None, "", "")
+        if current != version:
+            current = store.current(name)
         if not current:
             raise Refused(404, f"no page named {name}")
         if version != current:
             raise Refused(409, STALE)
-        old = store.meta(name, current)
+        old = files.meta(name, current)
         if who.strip().lower() != (old.get("published_by") or "").strip().lower():
             raise Refused(403, "only the owner can edit this page")
-        prefix = store.key(name, current) + "/"
-        files = store.sizes(prefix)
-        if rel not in files:
-            raise Refused(404, f"{rel} is not in version {current}")
-        if files[rel] > MAX_HTML:
-            raise Refused(413, f"{rel} is over {MAX_HTML // 1024**2} MB; edit its source instead")
+        # Under way while the file is read and patched: the new version id, the file list, and
+        # the versions for the answer.
+        if uploads:
+            reserving = pool.submit(uploads.reserve, name)
+        else:
+            reserving = pool.submit(new_version, store, name)
+        listing = pool.submit(files.listing, name, current)
+        listed = pool.submit(pages.versions, name) if pages else None
         try:
-            source = store.get(prefix + rel)["Body"].read().decode("utf-8")
-        except UnicodeDecodeError:
-            raise Refused(422, f"{rel} is not UTF-8 text; edit its source instead") from None
-        patched = patch(source, changes).encode("utf-8")
+            sizes = listing.result()
+            if rel not in sizes:
+                raise Refused(404, f"{rel} is not in version {current}")
+            if sizes[rel] > MAX_HTML:
+                too_big = f"{rel} is over {MAX_HTML // 1024**2} MB; edit its source instead"
+                raise Refused(413, too_big)
+            raw = files.read(name, current, rel)
+            if raw is None:
+                raise Refused(404, f"{rel} is not in version {current}")
+            try:
+                source = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise Refused(422, f"{rel} is not UTF-8 text; edit its source instead") from None
+            phases.lap("lookup")
+            patched = patch(source, changes).encode("utf-8")
+            phases.lap("patch")
+            new = reserving.result()
+            phases.lap("reserve")
 
-        new = uploads.reserve(name) if uploads else new_version(store, name)
-        try:
-            others = [p for p in files if p not in (rel, META_FILE)]
-            dst = store.key(name, new) + "/"
-            with ThreadPoolExecutor(COPY_THREADS) as pool:
-                for done in [pool.submit(store.copy, prefix + p, dst + p) for p in others]:
-                    done.result()
-            store.put(store.key(name, new, rel), patched)
+            # The patched file and the copies of the others, all at once.
+            others = [p for p in sizes if p not in (rel, META_FILE)]
+            src, dst = store.key(name, current) + "/", store.key(name, new) + "/"
+            start = time.monotonic()
+            put = pool.submit(_timed, start, store.put, dst + rel, patched)
+            copies = {p: pool.submit(_timed, start, store.copy, src + p, dst + p) for p in others}
+            tags = {p: done.result()[0] for p, done in copies.items()}
+            html_tag, put_seconds = put.result()
+            phases.took("copies", max((done.result()[1] for done in copies.values()), default=0))
+            phases.took("put", put_seconds)
+            phases.skip()
+
             page = page_record(
                 name, new, who, old.get("description", ""),
                 {**(old.get("meta") or {}), "edited_from": current}, old.get("git"),
                 len(others) + 1,
             )  # fmt: skip
-            # `current` may not have moved while the files were copied (set-current, a publish).
+            # `current` may not have moved while the files were written (set-current, a publish).
             if store.current(name) != current:
+                if pages:
+                    pages.forget(name)
                 raise Refused(409, STALE)
-            finish(store, page, None)
+            meta_tag = finish(store, page, None)
+            phases.lap("commit")
         finally:
-            if uploads:
-                uploads.release(name, new)
+            if uploads and reserving.exception() is None:
+                uploads.release(name, reserving.result())
+
+        # Written: keep the new version as if it had been read, so the answer and the next save
+        # cost no bucket reads. The other files are the old version's bytes; the ETags are the
+        # bucket's for the new keys (the old file's when the copy answered none).
+        data = page_json(page)
+        files.seed_listing(name, new, {**sizes, rel: len(patched), META_FILE: len(data)})
+        for path, tag in tags.items():
+            kept = files.peek(name, current, path)
+            if kept is not None:
+                tag = tag or kept.etag[len(current) + 2 : -1]
+                files.seed(name, new, path, tag, kept.data, kept.size)
+        files.seed(name, new, rel, html_tag, patched, len(patched))
+        files.seed(name, new, META_FILE, meta_tag, data, len(data))
+        if pages:
+            try:
+                versions = sorted({*listed.result(), current, new})
+            except Exception:  # the list is asked again when needed
+                versions = None
+            pages.put(name, (new, visibility, who), versions)
     return page

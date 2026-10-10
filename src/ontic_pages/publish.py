@@ -128,14 +128,20 @@ def page_record(
     }
 
 
-def finish(store: Store, page: dict, visibility: str | None) -> None:
+def page_json(page: dict) -> bytes:
+    """page.json as written to the bucket."""
+    return json.dumps(page, indent=2).encode()
+
+
+def finish(store: Store, page: dict, visibility: str | None) -> str:
     """After the files: page.json, then the visibility (only when given; a later publish without
-    it keeps the level), then flip `current`."""
+    it keeps the level), then flip `current`. Returns page.json's ETag (may be empty)."""
     name, version = page["name"], page["version"]
-    store.put(store.key(name, version, META_FILE), json.dumps(page, indent=2).encode())
+    etag = store.put(store.key(name, version, META_FILE), page_json(page))
     if visibility is not None:
         store.set_visibility(name, visibility)
     store.set_current(name, version)
+    return etag
 
 
 def publish(

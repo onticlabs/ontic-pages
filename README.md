@@ -131,6 +131,14 @@ with you as `published_by`, the old description, git and meta, plus `edited_from
 you edited>` in meta. So before publishing a page again from its source, check
 `ontic-pages info <name>` for `edited_from` and carry those edits over (`pull` it and compare).
 
+A save is quick: the gateway does not read again what it holds in memory (the edited version's
+`page.json`, file list and HTML), writes the edited file while it copies the others, and keeps
+what it wrote, so its answer and the next save read nothing more. Only `current` is always asked
+of the bucket, right before it is written. Each save logs one line with the time of each step
+(`journalctl -u pages-gateway | grep ' edit '`): lookup, patch, reserve (the new version id),
+copies, put (the edited file), commit (`current` checked, then `page.json` and `current`
+written), answer and total.
+
 ### Without the gateway: `--direct`
 
 Admins with a bucket key can skip the gateway: `publish`, `list`, `info`, `pull`, `share` and

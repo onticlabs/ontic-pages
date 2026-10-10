@@ -14,7 +14,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   picks the version, presigned PUT URLs, the size check and the commit.
 - `src/ontic_pages/edits.py`: text edited in the bar, the gateway's side: finds each changed text
   in the HTML source (exactly once, else nothing is saved), and writes a new version (server-side
-  copies of the other files, the patched file, page.json with `edited_from`).
+  copies of the other files, the patched file, page.json with `edited_from`), reading only what
+  the gateway's caches do not hold, and logs one timing line per save (`Phases`).
 - `src/ontic_pages/pull.py`: `ontic-pages pull`: the gateway's presigned GET URLs for a version's
   files, and downloading them into a folder.
 - `src/ontic_pages/tokens.py`: the command line's tokens (HMAC signed, 30 days) and the login
@@ -30,7 +31,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   `--local-as`), the access rule, the write rate limit. Never read identity request headers.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
-- `src/ontic_pages/cache.py`: the in-memory caches (version files, page state).
+- `src/ontic_pages/cache.py`: the in-memory caches (version files and file lists, page state);
+  a saved edit seeds them with what it wrote.
 - `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
   gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment
   text and anchors; deleted comments stay as tombstones.
