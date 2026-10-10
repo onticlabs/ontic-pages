@@ -259,6 +259,8 @@ out.afterSave = [h1.textContent, editable()];
 out.typedAgain = type(h1, "Title & more!!");
 out.save3 = msg({ ontic: "edit-mode", on: false, save: true });
 out.resume3 = msg({ ontic: "edit-mode", on: true });  // refused: the change is still there
+// Saved, said to a page that has not sent its edits (another page sent them): nothing changes.
+out.notMine = [msg({ ontic: "edit-mode", on: true, saved: true }), h1.textContent];
 // Discard: every original text comes back; the page's own editor is left alone.
 out.discard = msg({ ontic: "edit-mode", on: true, discard: true });
 out.restored = [h1.textContent, editable(), own.getAttribute("contenteditable"),
@@ -418,6 +420,27 @@ const unload = () => fire(window, "beforeunload", {}).defaultPrevented;
   await tick(); await tick(); await tick();
   out.raced = [swaps - swapsBefore, framePosts.slice(), window.onticBar.page().current,
     q("edit-done").hidden];
+
+  // Another document loads in the frame while a save is on its way (a reload): its answer
+  // leaves that document's edits alone and only brings the saved version into the facts.
+  message({ ontic: "ready" });
+  message({ ontic: "edit-state", changes: 1 });
+  q("edit-save").click();
+  let release2;
+  answers.push({ ok: true, status: 200, gate: new Promise((r) => { release2 = r; }),
+    body: { version: "v6", page: Object.assign({}, next, { current: "v6" }) } });
+  message({ ontic: "edits", path: "/", changes: [{ before: "g", after: "h" }] });
+  message({ ontic: "ready" });
+  message({ ontic: "edit-state", changes: 2 });  // typed in the new document
+  const swaps2 = swaps;
+  framePosts.length = 0;
+  release2();
+  await tick(); await tick(); await tick();
+  out.otherDoc = [framePosts.slice(), q("edit-count").textContent, shown(),
+    window.onticBar.page().current, swaps - swaps2];
+  q("edit-discard").click();
+  q("edit-really").click();
+  out.otherDoc.push(swaps - swaps2);  // nothing unsaved now: the saved version fades in
   console.log(JSON.stringify(out));
 })();
 """
@@ -493,6 +516,7 @@ def test_bridge_comment_mode_save_and_discard():
     assert out["typedAgain"] == [state(1)]
     assert out["save3"] == edits("Title & more!", "Title & more!!")
     assert out["resume3"] == [state(1)]
+    assert out["notMine"] == [[state(1)], "Title & more!!"]  # still one change, unsaved
     assert out["discard"] == [state(0)]
     # Discard puts back the text as last saved.
     assert out["restored"] == ["Title & more!", [], "true", False]
@@ -541,6 +565,9 @@ def test_bar_edit_flow():
     assert error == "The page reloaded; unsaved changes are gone."
     # A publish made another version current during the save: that one fades in.
     assert out["raced"] == [1, [], "v5", False]
+    # A save answered after the frame loaded another document: no saved:true to it, its own
+    # changes stay unsaved, the new version is current in the bar and waits for them.
+    assert out["otherDoc"] == [[], "2 changes", True, "v6", 0, 1]
 
 
 @pytest.mark.parametrize("role, viewing", [("viewer", None), ("owner", "v0")])

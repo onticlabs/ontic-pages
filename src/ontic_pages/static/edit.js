@@ -18,6 +18,7 @@
   var state = "idle"; // idle, confirm (asking before Discard), saving (asked the page), posting
   var changes = 0;
   var version = null; // the version the page in the frame shows
+  var doc = 0; // counts the documents loaded in the frame: a save's answer is for its own
   var timer = 0;
   var ui = null;
 
@@ -76,6 +77,7 @@
   // A page loaded in the frame: editing starts there, with nothing changed yet.
   function start() {
     var lost = changes > 0 && !busy();
+    doc += 1;
     clearTimeout(timer);
     state = "idle";
     changes = 0;
@@ -149,6 +151,14 @@
     }
   }
 
+  // A save's answer after another document loaded in the frame (a reload, a link): that
+  // document's edits and count are its own and stay as they are. The committed version only
+  // goes into the bar's facts; it fades in once nothing unsaved holds the frame.
+  function savedElsewhere(answer) {
+    bar.adopt(answer.page);
+    if (!unsaved()) settled();
+  }
+
   function send(message) {
     if (state !== "saving") return;
     clearTimeout(timer);
@@ -165,6 +175,7 @@
     }
     state = "posting"; // another answer from the page is not sent again
     var name = bar.page().name;
+    var mine = doc;
     fetch("/_api/pages/" + encodeURIComponent(name) + "/edits", {
       method: "POST",
       credentials: "same-origin",
@@ -174,10 +185,16 @@
       return response.json().then(function (body) { return { ok: response.ok, body: body }; });
     }).then(function (result) {
       var body = result.body;
-      if (result.ok && body && body.page && typeof body.version === "string") saved(body);
-      else failed((result.body && result.body.error) || "Could not save.");
+      var ok = result.ok && body && body.page && typeof body.version === "string";
+      if (mine !== doc) {
+        if (ok) savedElsewhere(body);
+      } else if (ok) {
+        saved(body);
+      } else {
+        failed((body && body.error) || "Could not save.");
+      }
     }, function () {
-      failed("Could not reach the server; try Save again.");
+      if (mine === doc) failed("Could not reach the server; try Save again.");
     });
   }
 

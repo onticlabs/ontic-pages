@@ -15,7 +15,8 @@
 // mode is on, editing is suspended as well), {discard: true} first puts every original text
 // back, {on: false, save: true} answers edits {path, changes: [{before, after}]} and stops
 // editing, leaving the new text on screen; {on: true, saved: true} after the save makes that
-// text the original (the count goes to 0, nothing reloads) and editing goes on. To the
+// text the original (the count goes to 0, nothing reloads; only in the page that sent the
+// edits) and editing goes on. To the
 // bar: edit-state {changes} whenever the count changes or editing starts, with save: true for
 // Cmd/Ctrl+S in the page.
 (function () {
@@ -43,6 +44,7 @@
   var commenting = false; // comment mode: clicks make comments, nothing is editable
   var mode = "";
   var sent = -1; // the count last told to the bar
+  var answered = false; // this page sent its edits for a save; the bar has not said back yet
 
   function send(message) {
     try {
@@ -234,7 +236,9 @@
     }
     if (message.ontic !== "edit-mode") return;
     if (message.discard === true) discard();
-    if (message.saved === true) rebase();
+    // Only the edits this very page sent can have been saved.
+    if (message.saved === true && answered) rebase();
+    answered = message.save === true;
     if (message.save === true) {
       send(edits());
       enabled = false;
