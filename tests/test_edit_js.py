@@ -206,6 +206,14 @@ out.focused = h1.style.outline;
 fire(window, "focusout", { target: h1 });
 document.activeElement = body;
 out.blurredOutline = h1.style.outline;
+// The page's own outline stays while hovered, and comes back after the focus.
+plain.style.outline = "3px solid green";
+fire(window, "pointerover", { target: plain });
+const own1 = plain.style.outline;
+fire(window, "focusin", { target: plain });
+const own2 = plain.style.outline;
+fire(window, "focusout", { target: plain });
+out.ownOutline = [own1, own2, plain.style.outline];
 // A script changes a text: not a change. Typing is.
 posted.length = 0;
 clock.textContent = "10:01";
@@ -409,15 +417,17 @@ def test_bridge_editable_set():
     assert out["ignored"] == [[], []]  # other origins and windows are ignored
     assert out["start"] == [state(0)]
     assert out["lazy"] == []
-    hovered, outline, offset = out["hovered"]
-    assert hovered == ["h1:Title & more"] and outline.startswith("1px solid") and offset == "2px"
-    assert out["unhovered"] == ["", ["h1:Title & more"]]  # the outline only while hovered
+    # No highlight: hovering makes it editable and changes nothing else.
+    assert out["hovered"] == [["h1:Title & more"], "", ""]
+    assert out["unhovered"] == ["", ["h1:Title & more"]]
     # Text-only elements; never links, buttons, labels, summaries, roles, onclick, a tabindex,
     # a pointer cursor, the page's own editors, svg or empty ones, nor anything inside those.
     assert out["editable"] == [
         "h1:Title & more", "b:bold", "p:Plain para", "span:10:00", "p:In main", "pre:code\nblock"
     ]  # fmt: skip
-    assert out["focused"].startswith("2px solid") and out["blurredOutline"] == ""
+    # The browser's focus ring is off while focused; the page's own outline comes back.
+    assert out["focused"] == "none" and out["blurredOutline"] == ""
+    assert out["ownOutline"] == ["3px solid green", "none", "3px solid green"]
 
 
 def test_bridge_counts_only_typed_changes():

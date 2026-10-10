@@ -101,7 +101,8 @@ it to see what is published now, for example after someone fixed text in the bro
 The owner of a page, looking at its current version in the bar, can fix its text right there:
 there is no Edit button, editing is always on for them. Every element that holds nothing but
 text (paragraphs, headings, list items, table cells, captions, ...) can be clicked into and typed
-over, with a text cursor and a light outline only while the pointer or the focus is on it.
+over. Nothing highlights it: the text looks exactly like the page, only the text cursor shows
+(the browser's focus ring is turned off on the text being edited).
 Interactive elements are never editable, nor anything inside them (links, buttons, `summary`,
 labels, form fields, elements with a `role` such as button or link, `onclick`, a `tabindex` (a
 container's `tabindex="-1"` aside), a pointer cursor, or the page's own `contenteditable`), so
