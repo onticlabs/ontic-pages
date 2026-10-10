@@ -197,6 +197,16 @@ def test_gateway_does_not_sync(home, monkeypatch):
     assert not (home / ".claude" / "skills").exists()
 
 
+def test_skill_sync_installs_quietly_and_never_overwrites_your_copy(home, capsys):
+    mine = skill_file(home / ".claude")
+    mine.parent.mkdir(parents=True)
+    mine.write_text("mine\n")
+    cli.main(["skill", "--sync"])
+    assert capsys.readouterr().out == ""
+    assert mine.read_text() == "mine\n"
+    assert skill_file(home / ".codex").read_text() == WANTED
+
+
 def test_skill_status(home, capsys):
     target = skill_file(home / ".claude")
     target.parent.mkdir(parents=True)

@@ -7,6 +7,7 @@ The commands talk to the gateway (ONTIC_PAGES_URL) signed in with `ontic-pages l
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -222,6 +223,9 @@ def cmd_whoami(args) -> None:
 
 
 def cmd_skill(args) -> None:
+    if args.sync:  # quiet: the ontic CLI's daily background refresh
+        skills.sync_skill()
+        return
     if args.print:
         sys.stdout.write(skills.bundled())
         return
@@ -258,7 +262,11 @@ def cmd_gateway(args) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     # Run as `ontic pages ...` through the ontic CLI, or as `ontic-pages ...` on its own.
-    prog = "ontic pages" if Path(sys.argv[0]).name == "ontic" else "ontic-pages"
+    # Run as `ontic pages ...` through the ontic CLI (in its process, or through uvx with
+    # ONTIC_PAGES_PROG set), or as `ontic-pages ...` on its own.
+    prog = os.environ.get("ONTIC_PAGES_PROG") or (
+        "ontic pages" if Path(sys.argv[0]).name == "ontic" else "ontic-pages"
+    )
     p = argparse.ArgumentParser(prog=prog, description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
     key = argparse.ArgumentParser(add_help=False)
@@ -344,6 +352,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="write ours, also over your own copy (never over a symlink)",
     )
     which.add_argument("--print", action="store_true", help="print the bundled skill text")
+    which.add_argument(
+        "--sync",
+        action="store_true",
+        help="install or refresh it as every command does, quietly (never a downgrade)",
+    )
     s.set_defaults(func=cmd_skill)
 
     s = sub.add_parser("gateway", help="serve the bucket over HTTP (runs on the server)")

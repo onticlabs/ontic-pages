@@ -168,7 +168,12 @@ keep your own edits. A copy without it, or a symlinked `SKILL.md`, is left alone
 ontic-pages skill             # where it is installed, its revision and whether it is current
 ontic-pages skill --install   # write ours, also over your own copy (never over a symlink)
 ontic-pages skill --print     # the bundled text
+ontic-pages skill --sync      # install or refresh quietly, as every command does (the ontic CLI's daily refresh)
 ```
+
+The ontic CLI runs this tool as `ontic pages ...` (from GitHub `main` through uvx) and sets
+`ONTIC_PAGES_PROG="ontic pages"` so the help names the command people typed.
+
 
 The text lives in `src/ontic_pages/skills/ontic-pages/SKILL.md`.
 
