@@ -155,13 +155,17 @@ publish a page. Every command except `gateway` and `skill` copies it to
 exists (it is never created). Reinstalling the tool runs no code, so this keeps the skill current
 after an update. It prints one line to stderr on a first install and nothing otherwise.
 
-The installed copy has a marker line (an HTML comment) after the frontmatter. A copy with the
-marker is rewritten whenever it differs from the bundled text; delete the marker line to keep
-your own edits. A copy without it, or a symlinked `SKILL.md`, is left alone.
-`ONTIC_AGENT_SKILLS=0` turns the sync off.
+The installed copy has a marker line (an HTML comment) after the frontmatter, with the skill's
+revision number in it. A copy with the marker is rewritten when its revision is lower than this
+install's (or it has none, from before revisions), or when it has the same revision but other
+text. A copy with a higher revision came from a newer ontic-pages and is left alone, so an
+older install on the same machine never puts its older text back. Delete the marker line to
+keep your own edits. A copy without it, or a symlinked `SKILL.md`, is left alone.
+`ONTIC_AGENT_SKILLS=0` turns the sync off. Whoever changes `SKILL.md` bumps `skills.REVISION`
+(a test pins the text's hash to it).
 
 ```sh
-ontic-pages skill             # where it is installed and whether it is current
+ontic-pages skill             # where it is installed, its revision and whether it is current
 ontic-pages skill --install   # write ours, also over your own copy (never over a symlink)
 ontic-pages skill --print     # the bundled text
 ```

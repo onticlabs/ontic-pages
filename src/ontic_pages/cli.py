@@ -226,6 +226,7 @@ def cmd_skill(args) -> None:
         sys.stdout.write(skills.bundled())
         return
     rows = skills.install() if args.install else skills.status()
+    print(f"This install has skill revision {skills.REVISION}.")
     for agent, target, state in rows:
         print(f"{agent}: {target}\n  {state}")
     if not args.install:
