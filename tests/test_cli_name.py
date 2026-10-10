@@ -6,3 +6,9 @@ def test_help_names_the_command_it_was_run_as(monkeypatch):
     assert build_parser().prog == "ontic pages"
     monkeypatch.setattr("sys.argv", ["/home/u/.local/bin/ontic-pages"])
     assert build_parser().prog == "ontic-pages"
+
+
+def test_help_name_from_the_ontic_cli(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["/home/u/.cache/uv/archive-v0/x/bin/ontic-pages"])
+    monkeypatch.setenv("ONTIC_PAGES_PROG", "ontic pages")
+    assert build_parser().prog == "ontic pages"
