@@ -131,12 +131,17 @@ Change it only when the user asks:
 
 ```bash
 ontic pages publish ./report --name depth-eval --visibility private   # only the publisher
+ontic pages share depth-eval private --with ana@onticlabs.io --with bo@onticlabs.io
+                                         # the publisher and these two only
 ontic pages share depth-eval public      # anyone with the link, no sign-in
 ontic pages share depth-eval ontic       # back to the team
 ```
 
 Visibility belongs to the page, not to a version. The link is the same at every level.
-The owner can also change it from the Share button in the bar.
+`--with` (repeatable, `@onticlabs.io` emails only) goes with `private`, on `share` or with
+`publish --visibility private`; each `share` sets the whole list, so name everyone again (or
+nobody, for the publisher alone). `info` and `list` show whom a page is shared with. The owner
+can also change it from the Share button in the bar.
 
 ## Versions
 

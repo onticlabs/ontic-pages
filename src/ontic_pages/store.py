@@ -2,7 +2,9 @@
 at the bucket root):
 
     <prefix><name>/current                   the current version id, as text
-    <prefix><name>/visibility                private, ontic or public (absent means ontic)
+    <prefix><name>/visibility                private, ontic or public (absent means ontic); for
+                                             private, then one email per line: the people it
+                                             is shared with besides its owner
     <prefix><name>/comments.json             the comments, written by the gateway (comments.py)
     <prefix><name>/labels.json               pillar, tags, milestone, title as changed in the
                                              overview, and deleted (hidden; nothing is removed)
@@ -31,6 +33,11 @@ HOST_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*
 VERSION_RE = re.compile(r"^\d{8}T\d{6}Z$")
 VISIBILITIES = ("private", "ontic", "public")
 DEFAULT_VISIBILITY = "ontic"
+# A private page may also be shared with a few people, by email at the team's domain (the
+# gateway's --email-domain; this default for --direct).
+EMAIL_DOMAIN = "onticlabs.io"
+PERSON_RE = re.compile(r"^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,190}$")
+MAX_PEOPLE = 50
 # The research pillars of the mission repo (pillars.yaml), and other for the rest.
 PILLARS = ("data", "scene-reconstruction", "world-models", "robot-learning", "other")
 DEFAULT_PILLAR = "other"
@@ -77,6 +84,25 @@ def check_visibility(level: str) -> str:
     if level not in VISIBILITIES:
         raise ValueError(f"visibility must be one of {', '.join(VISIBILITIES)}, got {level!r}")
     return level
+
+
+def check_people(level: str, people, domain: str = "") -> list[str]:
+    """The people a private page is shared with besides its owner, as kept: lowercase emails
+    (at `domain` when given), no repeats, sorted. Only private takes people; share another
+    level and the list is gone."""
+    if not isinstance(people, (list, tuple)) or not all(isinstance(p, str) for p in people):
+        raise ValueError("people: a list of emails")
+    people = sorted({p.strip().lower() for p in people} - {""})
+    if people and level != "private":
+        given = f"not {level}" if level else "give the private level with them"
+        raise ValueError(f"only a private page is shared with people ({given})")
+    for person in people:
+        if not PERSON_RE.match(person) or (domain and not person.endswith("@" + domain.lower())):
+            at = f" at @{domain}" if domain else ""
+            raise ValueError(f"bad email {person!r}: share with team accounts{at} only")
+    if len(people) > MAX_PEOPLE:
+        raise ValueError(f"at most {MAX_PEOPLE} people")
+    return people
 
 
 def check_pillar(pillar: str) -> str:
@@ -224,14 +250,29 @@ class Store:
 
     def visibility(self, name: str) -> str:
         """The page's level; absent means ontic, anything unreadable means private."""
+        return self.access(name)[0]
+
+    def access(self, name: str) -> tuple[str, tuple[str, ...]]:
+        """(level, people): absent means ontic, an unreadable first line private with nobody.
+        People are the lines after a private level that look like emails; the rest is dropped.
+        (Gateways from before people read such a file as unreadable, so private: owner only.)"""
         text = self.read_text(self.key(name, "visibility"))
         if text is None:
-            return DEFAULT_VISIBILITY
-        level = text.strip()
-        return level if level in VISIBILITIES else "private"
+            return DEFAULT_VISIBILITY, ()
+        level, *lines = text.strip().split("\n")
+        level = level.strip()
+        if level not in VISIBILITIES:
+            return "private", ()
+        if level != "private":
+            return level, ()
+        people = {p.strip().lower() for p in lines} - {""}
+        return level, tuple(sorted(p for p in people if PERSON_RE.match(p))[:MAX_PEOPLE])
 
-    def set_visibility(self, name: str, level: str) -> None:
-        self.put(self.key(name, "visibility"), check_visibility(level).encode())
+    def set_visibility(self, name: str, level: str, people=()) -> None:
+        """The level, and for private the people it is shared with (check_people, without the
+        domain check: callers check that with theirs). Replaces the list."""
+        people = check_people(check_visibility(level), list(people))
+        self.put(self.key(name, "visibility"), "\n".join([level, *people]).encode())
 
     def labels(self, name: str) -> dict:
         """The page's labels.json ({} when absent or unreadable): what the overview changed

@@ -28,7 +28,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   on page hosts (`<name>.<suffix>`), the API, file answers with ETags. Sign-in stays in
   oauth2-proxy.
 - `src/ontic_pages/auth.py`: who is asking (the oauth2-proxy `/oauth2/auth` subrequest, or
-  `--local-as`), the access rule, the write rate limit. Never read identity request headers.
+  `--local-as`), the access rule (a private page's people come from its `visibility` file,
+  `Store.access`, through the page cache), the write rate limit. Never read identity request headers.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files and file lists, page state);
@@ -78,7 +79,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
   `helpers.upload_server` takes its presigned PUTs and answers its GETs). `test_js.py` runs
   bridge.js and bar.js in node, `test_comments_js.py` pins.js and comments.js, and
-  `test_edit_js.py` the served edit mode, `test_details_js.py` the Details panel, each with a small fake DOM (all skipped without node).
+  `test_edit_js.py` the served edit mode, `test_details_js.py` the Details panel,
+  `test_share_js.py` the Share panel's people, each with a small fake DOM (all skipped without
+  node).
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules

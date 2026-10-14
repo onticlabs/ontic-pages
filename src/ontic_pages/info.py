@@ -112,11 +112,16 @@ def shown(current: str | None, metas: list[dict]) -> dict:
     return next((m for m in metas if m.get("version") == current), metas[0] if metas else {})
 
 
-def info_text(name: str, current: str | None, metas: list[dict], visibility: str) -> str:
+def shared(visibility: str, people) -> str:
+    """The visibility, and for a private page whom it is shared with besides its owner."""
+    return f"{visibility}, shared with {', '.join(people)}" if people else visibility
+
+
+def info_text(name: str, current: str | None, metas: list[dict], visibility: str, people=()) -> str:
     page = shown(current, metas)
     lines = [
         f"page         {name}",
-        f"visibility   {visibility}",
+        f"visibility   {shared(visibility, people)}",
         f"current      {current}",
         f"published    {stamp(page.get('published_at'))} by {page.get('published_by', '')}",
         f"description  {page.get('description', '')}",
@@ -160,7 +165,7 @@ td:first-child { font-variant-numeric: tabular-nums; }
 """
 
 
-def info_html(name: str, current: str | None, metas: list[dict], visibility: str) -> str:
+def info_html(name: str, current: str | None, metas: list[dict], visibility: str, people=()) -> str:
     e = html.escape
     page = shown(current, metas)
     meta = "".join(
@@ -200,7 +205,7 @@ def info_html(name: str, current: str | None, metas: list[dict], visibility: str
 <h1>{e(name)}</h1>
 <p>{e(page.get("description", ""))}</p>
 <table>
-<tr><th>Visibility</th><td>{e(visibility)}</td></tr>
+<tr><th>Visibility</th><td>{e(shared(visibility, people))}</td></tr>
 <tr><th>Published</th><td>{published}</td></tr>
 <tr><th>Version</th><td>{e(current or "")}</td></tr>
 <tr><th>Pillar</th><td>{e(PILLAR_LABELS[pillar_of(page)])}</td></tr>

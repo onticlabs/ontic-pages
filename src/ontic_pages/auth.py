@@ -25,14 +25,16 @@ class IdentityUnavailable(Exception):
     """oauth2-proxy did not answer."""
 
 
-def allowed(visibility: str, owner: str, email: str, domain: str) -> bool:
-    """public: anyone. ontic: an email at the domain. private: the current version's publisher."""
+def allowed(visibility: str, owner: str, email: str, domain: str, people=()) -> bool:
+    """public: anyone. ontic: an email at the domain. private: the current version's publisher,
+    and the people it is shared with (kept lowercase) when at the domain too."""
     email = email.strip().lower()
+    team = bool(email) and (not domain or email.endswith("@" + domain.lower()))
     if visibility == "public":
         return True
     if visibility == "private":
-        return bool(email) and email == owner.strip().lower()
-    return bool(email) and (not domain or email.endswith("@" + domain.lower()))
+        return bool(email) and (email == owner.strip().lower() or (team and email in people))
+    return team
 
 
 def fixed(email: str) -> Identity:

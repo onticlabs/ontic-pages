@@ -313,7 +313,7 @@ def test_save_reads_only_current_when_cached(store, s3, page):
     # The page's state as written: no reads for it either.
     s3.calls.clear()
     owner = OWNER
-    assert pages.get("report") == (again["version"], "ontic", owner)
+    assert pages.get("report") == (again["version"], "ontic", owner, ())
     assert pages.versions("report") == [page["version"], new["version"], again["version"]]
     assert files.meta("report", again["version"]) == again
     assert s3.calls == []
@@ -394,23 +394,33 @@ def test_access_change_during_the_save_is_kept(store, s3, page, monkeypatch):
     monkeypatch.setattr(store, "put", put)
     edit = body(page, change("Results", "Findings"))
     new = save(store, "report", OWNER, edit, None, files, pages)
-    assert pages.get("report") == (new["version"], "private", OWNER)
+    assert pages.get("report") == (new["version"], "private", OWNER, ())
 
 
 def test_page_state_read_before_a_change_is_not_kept(store, page, monkeypatch):
     files, pages = caches(store)
-    real = store.visibility
+    real = store.access
 
-    def visibility(name):  # another request makes the page private during this read
+    def access(name):  # another request makes the page private during this read
         level = real(name)
         store.set_visibility(name, "private")
         pages.forget(name)
         return level
 
-    monkeypatch.setattr(store, "visibility", visibility)
+    monkeypatch.setattr(store, "access", access)
     assert pages.get("report")[1] == "ontic"  # what it read
-    monkeypatch.setattr(store, "visibility", real)
+    monkeypatch.setattr(store, "access", real)
     assert pages.get("report")[1] == "private"  # not kept: read again
+
+
+def test_saved_state_keeps_the_people(store, page):
+    # A saved edit keeps whom a private page is shared with, so they can still open it.
+    store.set_visibility("report", "private", [OTHER])
+    files, pages = caches(store)
+    warm(files, pages, page)
+    new = save(store, "report", OWNER, body(page, change("Results", "Findings")), None, files,
+               pages)  # fmt: skip
+    assert pages.get("report") == (new["version"], "private", OWNER, (OTHER,))
 
 
 def test_saved_state_is_as_old_as_its_snapshot(store, page):
@@ -419,7 +429,7 @@ def test_saved_state_is_as_old_as_its_snapshot(store, page):
     read_at = pages.entries["report"][0]
     edit = body(page, change("Results", "Findings"))
     new = save(store, "report", OWNER, edit, None, files, pages)
-    assert pages.entries["report"] == (read_at, (new["version"], "ontic", OWNER))
+    assert pages.entries["report"] == (read_at, (new["version"], "ontic", OWNER, ()))
 
 
 def test_publish_during_the_save_wins(store, site, s3, page, monkeypatch):

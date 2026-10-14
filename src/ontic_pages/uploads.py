@@ -36,7 +36,7 @@ from .publish import (
     page_record,
     version_iso,
 )
-from .store import Store, check_pillar, check_tags, check_visibility
+from .store import Store, check_people, check_pillar, check_tags, check_visibility
 
 MAX_FILES = 5000
 MAX_BYTES = 5 * 1024**3
@@ -71,6 +71,7 @@ class Pending:
     markdown: str | None = None
     keep: bool = False  # a Markdown edit: the current version's other files come along
     files: dict[str, int] = field(default_factory=dict)
+    people: list[str] = field(default_factory=list)  # with a private visibility (check_people)
 
 
 def file_list(value, markdown: bool = False) -> dict[str, int]:
@@ -122,8 +123,9 @@ def page_text(body: dict) -> tuple[str, str | None]:
     return clean_title(title), markdown
 
 
-def metadata(body: dict) -> tuple[str, dict, dict | None, str | None]:
-    """description, meta, git and visibility from a start request, checked."""
+def metadata(body: dict, domain: str = "") -> tuple[str, dict, dict | None, str | None, list]:
+    """description, meta, git, visibility and people from a start request, checked (people at
+    `domain`, only with private)."""
     description, meta = body.get("description") or "", body.get("meta") or {}
     git, visibility = body.get("git"), body.get("visibility")
     if not isinstance(description, str):
@@ -137,18 +139,20 @@ def metadata(body: dict) -> tuple[str, dict, dict | None, str | None]:
             k in GIT_KEYS and (v is None or isinstance(v, GIT_KEYS[k])) for k, v in git.items()
         ):
             raise Refused(400, "git: {remote, branch, commit, dirty} or null")
-    if visibility is not None:
-        try:
+    try:
+        if visibility is not None:
             check_visibility(visibility)
-        except ValueError as err:
-            raise Refused(400, str(err)) from None
-    return description, meta, git, visibility
+        people = check_people(visibility or "", body.get("people") or [], domain)
+    except ValueError as err:
+        raise Refused(400, str(err)) from None
+    return description, meta, git, visibility, people
 
 
 class Uploads:
     def __init__(self, store: Store, seconds: float = PENDING_SECONDS, cap: int = MAX_PENDING):
         self.store, self.seconds, self.cap = store, seconds, cap
         self.find = None  # milestone id -> milestone or None (the gateway's Milestones.find)
+        self.domain = ""  # people a page is shared with must be at it (the gateway's domain)
         self.lock = threading.Lock()
         self.pending: dict[tuple[str, str], Pending] = {}
         self.reserved: set[tuple[str, str]] = set()  # versions an edit is writing (edits.py)
@@ -160,7 +164,7 @@ class Uploads:
     def start(self, name: str, who: str, body: dict) -> tuple[Pending, list[dict]]:
         """A new pending version with the first files, and their upload URLs. The caller has
         checked the name and that `who` may publish it."""
-        description, meta, git, visibility = metadata(body)
+        description, meta, git, visibility, people = metadata(body, self.domain)
         pillar, tags, milestone = page_labels(body)
         title, markdown = page_text(body)
         if milestone and self.find and self.find(milestone) is None:
@@ -177,7 +181,7 @@ class Uploads:
             version = new_version(self.store, name, taken=self._taken(name))
             up = Pending(
                 name, version, who, description, meta, git, visibility, now, pillar, tags,
-                milestone, title, markdown, keep,
+                milestone, title, markdown, keep, people=people,
             )  # fmt: skip
             self.pending[(name, version)] = up
         return up, self._add(up, files)
@@ -277,5 +281,5 @@ class Uploads:
             name, version, up.who, up.description, up.meta, up.git,
             len(up.files) + len(made) + kept, tagged, title, fmt,
         )  # fmt: skip
-        finish(self.store, page, up.visibility)
+        finish(self.store, page, up.visibility, up.people)
         return page, up.visibility
