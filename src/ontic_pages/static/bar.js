@@ -23,8 +23,9 @@
   var VERSION_PATH = /^\/_v\/(\d{8}T\d{6}Z)(\/.*)?$/;
   var peopleTyped = false; // the Share panel's people changed and not saved yet
   // One visibility change at a time: a later one could otherwise answer first and an earlier
-  // one undo it (a person taken off the list back on). Save meanwhile waits for it.
-  var sharing = false, shareAgain = false;
+  // one undo it (a person taken off the list back on). A Save meanwhile waits for it, with the
+  // list as it was when pressed (a later press replaces it): {people, text} or null.
+  var sharing = false, queued = null;
 
   function $(id) { return document.getElementById(id); }
   function frame() { return $("frame"); }
@@ -329,12 +330,12 @@
     }
   }
 
-  // The level and, for private, the whole list of people (none: only the owner).
-  function setVisibility(level, people) {
+  // The level and, for private, the whole list of people (none: only the owner). `text`: the
+  // field as it was when Save was pressed; typed text that differs from it is kept.
+  function setVisibility(level, people, text) {
     if (sharing) return;
     sharing = true;
     var select = $("s-access"), error = $("s-error"), field = $("s-people");
-    var sent = field ? field.value : "";
     error.hidden = true;
     select.disabled = true;
     fetch("/_api/pages/" + encodeURIComponent(name) + "/visibility", {
@@ -347,7 +348,7 @@
     }).then(function (result) {
       if (result.ok && result.body && result.body.name === name) {
         page = result.body;
-        if (!field || field.value === sent) peopleTyped = false; // else typed meanwhile: kept
+        if (!field || text === undefined || field.value === text) peopleTyped = false;
       } else {
         error.textContent = (result.body && result.body.error) || "Could not change it.";
         error.hidden = false;
@@ -363,19 +364,20 @@
   function shared() {
     sharing = false;
     render();
-    if (shareAgain) {
-      shareAgain = false;
-      savePeople();
+    if (queued) {
+      var next = queued;
+      queued = null;
+      setVisibility("private", next.people, next.text);
     }
   }
 
-  // The owner's list as typed in the Share panel; while a change runs, sent once it is done.
+  // The owner's list as typed in the Share panel when pressed; while a change runs, exactly that
+  // list is sent once it is done (never what is typed after the press).
   function savePeople() {
-    if (sharing) {
-      shareAgain = true;
-      return;
-    }
-    setVisibility("private", $("s-people").value.split(/[\s,;]+/).filter(Boolean));
+    var text = $("s-people").value;
+    var people = text.split(/[\s,;]+/).filter(Boolean);
+    if (sharing) queued = { people: people, text: text };
+    else setVisibility("private", people, text);
   }
 
   // ---- live updates: a new current version fades in where you were -------------------------

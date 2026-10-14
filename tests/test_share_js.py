@@ -49,8 +49,9 @@ const error = byId("s-error");
 (async () => {
   const out = { first: [box.hidden, field.value, field.readOnly, save.hidden] };
   if (RACE) {
-    // Save [a, b], take b off and save again before the first answer: the second is sent only
-    // after it, so b cannot come back; the select stays disabled meanwhile.
+    // Save [a, b], then before its answer: Enter on [a, x], Enter on [a] (it replaces the
+    // queued [a, x]), then type c without saving. Only [a] goes out, after the first answer,
+    // so b cannot come back and c gets nothing unasked; the select stays disabled meanwhile.
     let release;
     const both = Object.assign({}, PAGE, { people: ["a@onticlabs.io", "b@onticlabs.io"] });
     answers.push({ ok: true, status: 200, body: both, gate: new Promise((r) => (release = r)) });
@@ -59,9 +60,13 @@ const error = byId("s-error");
     field.value = "a@onticlabs.io, b@onticlabs.io";
     fire(field, "input");
     save.click();
-    field.value = "a@onticlabs.io";
+    for (const typed of ["a@onticlabs.io, x@onticlabs.io", "a@onticlabs.io"]) {
+      field.value = typed;
+      fire(field, "input");
+      fire(field, "keydown", { key: "Enter" });
+    }
+    field.value = "a@onticlabs.io, c@onticlabs.io";
     fire(field, "input");
-    fire(field, "keydown", { key: "Enter" });
     for (let i = 0; i < 5; i++) await tick();
     out.running = [fetches.map((f) => f[2].people), access.disabled];
     release();
@@ -114,9 +119,11 @@ def test_owner_edits_the_people():
 def test_one_change_at_a_time():
     out = share("owner", ["a@onticlabs.io", "b@onticlabs.io"], race=True)
     assert out["running"] == [[["a@onticlabs.io", "b@onticlabs.io"]], True]
-    # The second save goes out once, after the first answer, with what was typed last.
+    # One more save, after the first answer, with the list of the last press; the text typed
+    # after it stays in the field, unsent.
     sent = [["a@onticlabs.io", "b@onticlabs.io"], ["a@onticlabs.io"]]
-    assert out["done"] == [sent, "a@onticlabs.io", False] and out["calls"] == 2
+    assert out["done"] == [sent, "a@onticlabs.io, c@onticlabs.io", False]
+    assert out["calls"] == 2
 
 
 def test_people_see_the_list_read_only():
