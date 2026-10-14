@@ -77,7 +77,7 @@ def test_info_page(store, site, monkeypatch, serve):
     publish_two(store, site, monkeypatch)
     srv = serve()
     status, headers, body = request(srv, "/report/_info")
-    listing = request(srv, "/")[2].decode()
+    listing = request(srv, "/?plain=1")[2].decode()
     assert request(srv, "/nope/_info")[0] == 404
     text = body.decode()
     assert status == 200 and headers["Content-Type"] == "text/html; charset=utf-8"

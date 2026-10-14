@@ -74,24 +74,24 @@ def test_redirects_and_404s(serve, store, site):
 
 def test_listing(serve, store, site):
     server = serve()
-    assert b"No pages yet" in request(server, "/")[2]
+    assert b"No pages yet" in request(server, "/?plain=1")[2]
     publish(store, site, "report", "first <b>bold</b>", now=T1, pillar="data", tags=["eval"])
     publish(store, site, "zeta", "another one", now=T2)
-    status, headers, body = request(server, "/")
+    status, headers, body = request(server, "/?plain=1")
     assert status == 200 and headers["Content-Type"] == "text/html; charset=utf-8"
     assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
     text = body.decode()
     assert '<a href="/report/"><span title="report">report</span></a>' in text
     assert "first &lt;b&gt;bold&lt;/b&gt;" in text
     assert "07.10.2026 17:30" in text and "another one" in text  # Berlin time
-    assert '<a class="pillar" href="/?pillar=data">Data</a>' in text
-    assert '<a class="tag" href="/?tag=eval">eval</a>' in text
-    assert '<a href="/" aria-current="page">All <span class="n">2</span></a>' in text
-    assert '<a href="/?pillar=data">Data <span class="n">1</span></a>' in text
+    assert '<a class="pillar" href="/?plain=1&amp;pillar=data">Data</a>' in text
+    assert '<a class="tag" href="/?plain=1&amp;tag=eval">eval</a>' in text
+    assert '<a href="/?plain=1" aria-current="page">All <span class="n">2</span></a>' in text
+    assert '<a href="/?plain=1&amp;pillar=data">Data <span class="n">1</span></a>' in text
     # The filters: a pillar, a tag, both.
     text = request(server, "/?pillar=data")[2].decode()
     assert "/report/" in text and "/zeta/" not in text
-    assert '<a href="/?pillar=data" aria-current="page">Data' in text
+    assert '<a href="/?plain=1&amp;pillar=data" aria-current="page">Data' in text
     text = request(server, "/?pillar=other")[2].decode()
     assert "/report/" not in text and "/zeta/" in text
     text = request(server, "/?tag=eval")[2].decode()

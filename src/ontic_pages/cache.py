@@ -227,31 +227,67 @@ class PageCache:
 
 class LabelCache:
     """Each page's labels.json (Store.labels), kept for `ttl` seconds; a change the gateway
-    makes is put straight in."""
+    makes is put straight in. As in PageCache, a value read before a put() or forget() is never
+    kept after it (the page's generation moved meanwhile)."""
 
     def __init__(self, store: Store, ttl: float):
         self.store, self.ttl = store, ttl
         self.lock = threading.Lock()
         self.entries: dict[str, tuple[float, dict]] = {}
+        self.generations: dict[str, int] = {}
 
     def get(self, name: str) -> dict:
         now = time.monotonic()
         with self.lock:
             hit = self.entries.get(name)
+            generation = self.generations.get(name, 0)
         if hit and now - hit[0] < self.ttl:
             return hit[1]
         labels = self.store.labels(name)
         with self.lock:
-            self.entries[name] = (now, labels)
+            if self.generations.get(name, 0) == generation:
+                self.entries[name] = (now, labels)
         return labels
 
     def put(self, name: str, labels: dict) -> None:
         with self.lock:
+            self.generations[name] = self.generations.get(name, 0) + 1
             self.entries[name] = (time.monotonic(), labels)
 
     def forget(self, name: str) -> None:
         with self.lock:
+            self.generations[name] = self.generations.get(name, 0) + 1
             self.entries.pop(name, None)
+
+
+class NameCache:
+    """The names of all pages (Store.names, a bucket listing), kept for `ttl` seconds. A page
+    the gateway publishes is added straight away (add); one written around the gateway (--direct,
+    an admin script) shows up within ttl."""
+
+    def __init__(self, store: Store, ttl: float = 30.0):
+        self.store, self.ttl = store, ttl
+        self.lock = threading.Lock()
+        self.entry: tuple[float, list[str]] | None = None
+        self.generation = 0
+
+    def get(self) -> list[str]:
+        now = time.monotonic()
+        with self.lock:
+            hit, generation = self.entry, self.generation
+        if hit and now - hit[0] < self.ttl:
+            return hit[1]
+        names = self.store.names()
+        with self.lock:
+            if self.generation == generation:
+                self.entry = (now, names)
+        return names
+
+    def add(self, name: str) -> None:
+        with self.lock:
+            self.generation += 1
+            if self.entry and name not in self.entry[1]:
+                self.entry = (self.entry[0], sorted([*self.entry[1], name]))
 
 
 class DirectLinks:

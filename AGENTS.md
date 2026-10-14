@@ -36,7 +36,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files and file lists, page state);
-  a saved edit seeds them with what it wrote. `DirectLinks`: the presigned GET URLs handed out
+  a saved edit seeds them with what it wrote. `NameCache`: the list of pages, kept 6 times longer
+  than a page's state (a gateway publish adds to it at once). `DirectLinks`: the presigned GET URLs handed out
   with direct files on (reuse non-media URLs for 50 minutes; freshly sign audio/video).
 - `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
   gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment

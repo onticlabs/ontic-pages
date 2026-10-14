@@ -136,9 +136,10 @@ def make_client(cfg: Config):
             "aws_secret_access_key": cfg.secret_access_key,
         }
     # s3v4 for the presigned upload URLs too (B2 takes only that), signed for cfg.region.
+    # More pooled connections than the default 10: the gateway reads with several threads.
     return boto3.client(
         "s3", endpoint_url=cfg.endpoint, region_name=cfg.region,
-        config=BotoConfig(signature_version="s3v4"), **kwargs,
+        config=BotoConfig(signature_version="s3v4", max_pool_connections=32), **kwargs,
     )  # fmt: skip
 
 

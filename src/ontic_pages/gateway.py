@@ -69,6 +69,7 @@ import html
 import json
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -84,7 +85,7 @@ from .auth import (
     allowed,
     fixed,
 )
-from .cache import MB, DirectLinks, FileCache, LabelCache, PageCache
+from .cache import MB, DirectLinks, FileCache, LabelCache, NameCache, PageCache
 from .comments import Comments, listing
 from .comments import view as thread_view
 from .config import DEFAULT_URL
@@ -133,6 +134,12 @@ from .uploads import Refused, Uploads
 
 CHUNK = 256 * 1024
 YEAR = "max-age=31536000, immutable"
+READERS = 8  # bucket reads at a time for the overview's page states (Gateway.openable)
+NAMES_TTL_FACTOR = 6  # the list of pages is kept this many times longer than a page's state
+PLAIN_LINK = (
+    '<div class="plain"><h1>Ontic pages</h1><p>The overview needs JavaScript. '
+    '<a href="/?plain=1">The plain list of pages</a> works without it.</p></div>'
+)
 VERSIONED = re.compile(r"^_v/(\d{8}T\d{6}Z)(/.*)?$")
 API_PAGE = re.compile(r"^/_api/pages/([^/]+)$")
 API_INFO = re.compile(r"^/_api/pages/([^/]+)/info$")
@@ -235,6 +242,10 @@ class Gateway:
         self.milestones = Milestones(store, ttl)
         self.views = Views(store, ttl)
         self.labels = LabelCache(store, ttl)
+        # The list of pages changes only when a page is first published; kept longer.
+        self.names = NameCache(store, NAMES_TTL_FACTOR * ttl)
+        # Reads each page's state for the overview and listings, a few at a time (visible).
+        self.readers = ThreadPoolExecutor(READERS, thread_name_prefix="page-state")
         self.uploads.find = self.milestones.find
         self.uploads.domain = site.email_domain
         self.sync: Sync | None = None  # the GitHub milestone sync, when it runs (github.py)
@@ -255,7 +266,8 @@ class Gateway:
     def overview(self, email: str) -> dict:
         """What the overview draws: every report this viewer may open, newest first, and for
         the team the milestones and saved views."""
-        reports = [report(*row) for row in self.visible(email)]
+        rows = self.openable(email)
+        reports = [report(*row) for row, gone in rows if not gone]
         reports.sort(key=lambda r: r["published_at"], reverse=True)
         team = self.team(email)
         return {
@@ -278,7 +290,7 @@ class Gateway:
             if team and self.sync
             else [],
             "views": self.views.items() if team else [],
-            "deleted": [report(*row) for row in self.visible(email, deleted=True)],
+            "deleted": [report(*row) for row, gone in rows if gone],
             "content_origin": self.site.content_origin("__name__"),
         }
 
@@ -301,16 +313,27 @@ class Gateway:
     def visible(self, email: str, deleted: bool = False):
         """(name, current, visibility, owner, page.json with its labels, people) of each page
         this viewer may open; with deleted, only the deleted ones this viewer owns."""
+        for row, gone in self.openable(email):
+            if gone == deleted:
+                yield row
+
+    def openable(self, email: str) -> list[tuple[tuple, bool]]:
+        """(row as in visible, deleted) of each page this viewer may open, deleted ones only
+        when theirs. One listing; each page's state read on the readers, a few at a time (a
+        page whose state expired costs a few bucket reads, so one after another is slow)."""
         domain = self.site.email_domain
-        for name in self.store.names():
+
+        def state(name: str):
             version, visibility, owner, people = self.pages.get(name)
             if not version or not allowed(visibility, owner, email, domain, people):
-                continue
-            if bool(self.labels.get(name).get("deleted")) != deleted:
-                continue
-            if deleted and owner.strip().lower() != email.strip().lower():
-                continue
-            yield name, version, visibility, owner, self.meta(name, version), people
+                return None
+            gone = bool(self.labels.get(name).get("deleted"))
+            if gone and owner.strip().lower() != email.strip().lower():
+                return None
+            row = (name, version, visibility, owner, self.meta(name, version), people)
+            return row, gone
+
+        return [found for found in self.readers.map(state, self.names.get()) if found]
 
     def facts(self, name: str, email: str) -> dict:
         """What the bar shows. Emails only for a signed-in viewer."""
@@ -378,8 +401,8 @@ def report(name: str, version: str, visibility: str, owner: str, meta: dict, peo
 
 
 def listing_link(pillar: str, tag: str) -> str:
-    query = "&".join(f"{k}={quote(v)}" for k, v in (("pillar", pillar), ("tag", tag)) if v)
-    return "/" + (f"?{query}" if query else "")
+    pairs = (("plain", "1"), ("pillar", pillar), ("tag", tag))
+    return "/?" + "&".join(f"{k}={quote(v)}" for k, v in pairs if v)
 
 
 def listing_html(gw: Gateway, email: str, query: str = "") -> str:
@@ -655,7 +678,10 @@ def make_handler(gw: Gateway):
                 email = self.email()
                 if not email:
                     return self.redirect(site.sign_in(f"{site.origin}/"), 302)
-                page = overview_html(email, gw.assets, listing_html(gw, email, query))
+                # The list without script costs a read of every page: only when asked for
+                # (its link in <noscript>, its filters); the overview script asks the API.
+                plain = listing_html(gw, email, query) if query else PLAIN_LINK
+                page = overview_html(email, gw.assets, plain)
                 return self.send_body(200, page.encode(), {
                     "Content-Type": "text/html; charset=utf-8",
                     "Cache-Control": "no-cache",
@@ -1221,6 +1247,7 @@ def make_handler(gw: Gateway):
             page, _ = gw.uploads.commit(name, version, email)
             gw.pages.forget(name)
             gw.labels.forget(name)
+            gw.names.add(name)
             self.log_message("publish commit %s %s", name, version)
             visibility, people = gw.store.access(name)
             self.send_json(200, {

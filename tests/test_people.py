@@ -97,8 +97,8 @@ def test_gateway_shares_with_people(store, site, serve):
     status, _, body = request(server, "/report/", who=OTHER)
     assert b"open to its owner and the people they share it with only" in body
     # The listed person sees it everywhere the owner does; others nowhere.
-    assert '<a href="/report/">' in request(server, "/", who=FRIEND)[2].decode()
-    assert '<a href="/report/">' not in request(server, "/", who=OTHER)[2].decode()
+    assert '<a href="/report/">' in request(server, "/?plain=1", who=FRIEND)[2].decode()
+    assert '<a href="/report/">' not in request(server, "/?plain=1", who=OTHER)[2].decode()
     listed = json.loads(request(server, "/_api/pages", who=FRIEND)[2])["pages"]
     assert [(p["name"], p["people"]) for p in listed] == [("report", [FRIEND])]
     assert json.loads(request(server, "/_api/pages", who=OTHER)[2])["pages"] == []
