@@ -47,12 +47,20 @@ Either way, these differ from a claude.ai artifact:
 
 - Write a complete HTML document (`<!doctype html>`, `<head>`, `<body>`); nothing wraps it.
 - Publish relative supporting files next to `index.html` (CSS, scripts, JSON, images, video).
-  New pages automatically use direct delivery for eligible data/media; existing pages retain
-  server delivery. No delivery-mode selection is needed when publishing.
-- On new pages, use `crossorigin="anonymous"` on images/audio/video; for dynamic images set
-  `image.crossOrigin = "anonymous"` before assigning `src`. This enables direct delivery while
-  preserving canvas/WebGL access. Normal `fetch()` already uses CORS mode. HTML, CSS, scripts,
-  workers and requests requiring the same origin remain on the gateway.
+  Pages use direct delivery: their images, video, audio, fonts and data come from the bucket,
+  not through the server. No delivery option is needed when publishing.
+- ALWAYS load the page's own images, video and audio with `crossorigin="anonymous"`. Without it
+  the browser cannot take them from the bucket and every byte goes through the shared server.
+  - In HTML: `<img crossorigin="anonymous" src="img/a.png">`, the same on `<video>` and
+    `<audio>`. Publishing adds it to the page's own tags in its HTML files and says so; write
+    it anyway.
+  - In JavaScript, publishing cannot add it: set `el.crossOrigin = "anonymous"` on every
+    image, video and audio element you create, before setting `src`
+    (`const v = document.createElement("video"); v.crossOrigin = "anonymous"; v.src = url;`),
+    and the same on `new Image()` and three.js/other loaders (`loader.setCrossOrigin("anonymous")`).
+  - Never on media from other sites (`https://...`): they may not allow it and would break.
+  - Normal `fetch()` already uses CORS mode. HTML, CSS, scripts, workers and requests needing the
+    same origin stay on the server.
 - Resolve nested resources against the original page/resource URL, not `response.url` (which
   may be a signed bucket URL). Use `fetch(url, {mode: "same-origin"})` when the loader needs the
   original origin. Reloading the page renews one-hour links for authorized viewers; a long-idle

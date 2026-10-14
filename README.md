@@ -416,8 +416,10 @@ page.json and version ids stay in UTC.
   This keeps dependent URLs and canvas access working while offloading compatible data/media.
 
   Markdown-generated pages set anonymous CORS on local media automatically.
-  When writing a new HTML page, use `crossorigin="anonymous"` on images and video (or set
-  `image.crossOrigin = "anonymous"` before `src`). Normal `fetch()` already uses CORS mode.
+  Publishing adds `crossorigin="anonymous"` to the page's own `<img>`, `<video>` and `<audio>`
+  tags in its HTML files (not in scripts, not to other sites' media) and says how many; the
+  files on disk are not changed. Media made in JavaScript needs `el.crossOrigin = "anonymous"`
+  before `src`, set by the page itself. Normal `fetch()` already uses CORS mode.
   Resolve dependent files from the original page URL, not a redirected response's `url`.
   For data that requires the original origin, use `fetch(url, {mode: "same-origin"})`.
   Explicit `credentials: "include"` or XHR `withCredentials` also requires the bucket to

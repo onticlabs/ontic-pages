@@ -20,6 +20,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   files, and downloading them into a folder.
 - `src/ontic_pages/tokens.py`: the command line's tokens (HMAC signed, 30 days) and the login
   codes of the browser hand-off. In memory only.
+- `src/ontic_pages/crossorigin.py`: at publish (both ways), `crossorigin="anonymous"` added to
+  the page's own `<img>`, `<video>` and `<audio>` tags in its HTML files (patched copies in a
+  temporary folder, never the user's files), so direct delivery can take them from the bucket.
 - `src/ontic_pages/remote.py`: the command line's side of the gateway: the token file, JSON
   calls, `login`, and uploading files to the presigned URLs.
 - `src/ontic_pages/info.py`: the facts behind `ontic-pages info`, the gateway's `/<name>/_info` page,
