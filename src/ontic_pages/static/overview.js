@@ -326,8 +326,14 @@
 
   // ---- loading and drawing -------------------------------------------------------------------
 
+  // When the data was last asked for, and the answer still on its way (a focus refresh skips
+  // both: no second request while one runs, none within FRESH_MS of the last).
+  var loadedAt = 0, loading = null;
+  var FRESH_MS = 30000;
+
   function load() {
-    return api("GET", "/_api/overview").then(function (answer) {
+    loadedAt = Date.now();
+    loading = api("GET", "/_api/overview").then(function (answer) {
       data = answer;
       if (!state.loaded) {
         state.loaded = true;
@@ -342,7 +348,8 @@
       var app = $("app");
       app.textContent = "";
       app.appendChild(h("div", { class: "page" }, h("p", { class: "error", text: "Could not load: " + err.message })));
-    });
+    }).then(function () { loading = null; });
+    return loading;
   }
 
   function render() {
@@ -1245,7 +1252,10 @@
       render();
     }
   });
-  window.addEventListener("focus", function () { if (data && !closeDialog && !state.pop && !state.edit) load(); });
+  window.addEventListener("focus", function () {
+    if (!data || loading || Date.now() - loadedAt < FRESH_MS) return;
+    if (!closeDialog && !state.pop && !state.edit) load();
+  });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", load);
   else load();
 })();

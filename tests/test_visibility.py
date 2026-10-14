@@ -139,8 +139,8 @@ def test_identity_headers_are_ignored(pages):
 
 
 def test_listing_hides_private_and_shows_badges(pages):
-    owner = request(pages, "/", who=OWNER)[2].decode()
-    other = request(pages, "/", who=OTHER)[2].decode()
+    owner = request(pages, "/?plain=1", who=OWNER)[2].decode()
+    other = request(pages, "/?plain=1", who=OTHER)[2].decode()
     for name in ("pub", "team", "mine"):
         assert f'<a href="/{name}/">' in owner
     assert '<a href="/mine/">' not in other and '<a href="/team/">' in other
@@ -152,7 +152,7 @@ def test_listing_hides_private_and_shows_badges(pages):
 def test_listing_shortens_long_names(store, site, serve):
     name = "a-really-long-page-name-that-goes-past-the-limit"
     publish(store, site, name, "d" * 100, now=T1)
-    text = request(serve(), "/")[2].decode()
+    text = request(serve(), "/?plain=1")[2].decode()
     assert f'<span title="{name}">{name[:31]}…</span>' in text
     assert f'<span title="{"d" * 100}">{"d" * 59}…</span>' in text
 
