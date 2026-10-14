@@ -1,0 +1,81 @@
+# ontic-pages as an ontic-server app (github.com/onticlabs/ontic-server, the
+# commit in tool.lock). Copied from its templates/app/ and filled in for
+# pages. The older deploy (deploy/deploy.sh and pages.sh, one folder up) still
+# runs the live pages.onticlabs.io on ontic-vps; this folder does not touch it.
+#
+# Runtime settings live ONLY in quadlet/*.container, routing ONLY in
+# Caddyfile; this file never repeats them. Unknown keys are an error.
+#
+# As written it deploys on the rehearsal box (ontic-server
+# hosts/netcup-rehearsal.toml) under pages.62-83-41-41.sslip.io, a public
+# name that resolves to that box's address without any DNS change of ours.
+# Moving to the real name means changing it here, in Caddyfile and in both
+# quadlet/*.container files.
+
+[app]
+name = "pages"
+description = "ontic-pages: the team's hosted HTML pages (gateway plus Google sign-in)"
+
+[build]
+# The gateway image builds from the repository root with deploy/Dockerfile,
+# the same image the older deploy builds. The deploy builds the exact git
+# commit on the box, never the working tree.
+context = "../.."
+containerfile = "../Dockerfile"
+image = "localhost/pages"
+
+[units]
+managed = ["pages.network", "pages-gateway.container", "pages-oauth2-proxy.container"]
+
+[health]
+timeout_seconds = 120
+settle_seconds = 10
+# The gateway answers /_health on any host before it reads the bucket or asks
+# oauth2-proxy anything, so this works with dummy bucket credentials.
+port = 8790
+path = "/_health"
+expected_status = 200
+# The apex. Page hosts (*.<apex>) get certificates on demand (Caddyfile), so
+# only the apex has a certificate the deploy can check.
+public_host = "pages.62-83-41-41.sslip.io"
+public_checks = [{ path = "/_health", status = 200 }]
+
+[deploy]
+strategy = "stop-first"
+auto_rollback = true
+
+[state]
+# Every page lives in the bucket; the box keeps no data of its own.
+kind = "stateless"
+data_dir = ""
+backup = false
+
+[auth]
+# "app", not "oauth2-proxy": oauth2-proxy is not in the request path. Caddy
+# sends only /oauth2/* (start, callback, sign-out) to it; everything else
+# goes to the gateway, which decides access itself by asking oauth2-proxy's
+# /oauth2/auth who the request's cookie belongs to (src/ontic_pages/auth.py),
+# or by checking a command line token. The template's oauth2-proxy recipe
+# requires every non-bypass route to go through oauth2-proxy, which is not
+# this model (public pages are open to anyone).
+recipe = "app"
+# Probed through Caddy with no credentials, an invalid bearer token and
+# forged identity headers. /_api/me answers 401 to all three. "/" is not
+# listed: it redirects to /oauth2/start without credentials but answers 401
+# to an invalid bearer token, and one route may declare only one rejection;
+# hooks/post-start.sh checks its redirect instead.
+protected = [
+  { path = "/_api/me", reject = "401" },
+  { path = "/_api/pages", reject = "401" },
+]
+sign_in_redirects = []
+
+[hooks]
+pre_stop = ""
+pre_stop_timeout_seconds = 600
+# Sign-in redirect of the apex, Caddy's on-demand certificate question, the
+# bucket (skipped with dummy credentials) and the bucket's download CORS.
+post_start = "hooks/post-start.sh"
+post_start_timeout_seconds = 60
+watchdog = ""
+watchdog_timeout_seconds = 30
