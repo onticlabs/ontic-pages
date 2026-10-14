@@ -13,6 +13,8 @@ import json
 import os
 import re
 import subprocess
+import threading
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -263,14 +265,34 @@ def page_json(page: dict) -> bytes:
     return json.dumps(page, indent=2).encode()
 
 
+_guard = threading.Lock()
+_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+
+
+def page_lock(name: str) -> threading.Lock:
+    """One write of a page's version or labels.json at a time in this process (the gateway):
+    a publish commit, a saved edit, a delivery change."""
+    with _guard:
+        return _locks[name]
+
+
 def finish(store: Store, page: dict, visibility: str | None, people=()) -> str:
     """After the files: page.json, labels.json (the labels of this version, not deleted), then
     the visibility and its people (only when given; a later publish without it keeps both),
-    then flip `current`. Returns page.json's ETag (may be empty)."""
+    then flip `current`. Returns page.json's ETag (may be empty). The gateway calls it under
+    page_lock, so a delivery change cannot land between reading labels.json and writing it."""
     name, version = page["name"], page["version"]
+    # Delivery belongs to the page, not a version. Missing on an existing page means server;
+    # only the first successful publication of a new name defaults to direct delivery.
+    old_labels = store.labels(name)
+    delivery = old_labels.get("delivery")
+    if delivery is None:
+        delivery = "server" if store.current(name) else "direct"
+    if delivery not in ("server", "direct"):
+        delivery = "server"
     etag = store.put(store.key(name, version, META_FILE), page_json(page))
     # The labels start again from this version (and a deleted page is back).
-    store.set_labels(name, {k: page.get(k) for k in LABEL_KEYS})
+    store.set_labels(name, {**{k: page.get(k) for k in LABEL_KEYS}, "delivery": delivery})
     if visibility is not None:
         store.set_visibility(name, visibility, people)
     store.set_current(name, version)

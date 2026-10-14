@@ -27,7 +27,7 @@ Caddy and the same kind of Google sign-in that Olympus and Atlas use.
 ```sh
 cp deploy/secrets.env.example deploy/secrets.env && chmod 600 deploy/secrets.env
 $EDITOR deploy/secrets.env
-deploy/deploy.sh ontic-vps check     # changes nothing on the box
+deploy/deploy.sh ontic-vps check     # prepares checkout/secrets; validates without restarting
 deploy/deploy.sh ontic-vps           # check, then install
 deploy/deploy.sh ontic-vps status    # or: logs
 ```
@@ -136,17 +136,145 @@ itself, the shell and the page's files alike, and before every answer (304s too)
   answers `/_tls-ask` with 404 on both public sites; the gateway answers it only for
   a Host that is neither the apex nor a page host.
 
+## Direct delivery (default for new pages)
+
+After this release, first publication of a new page name records `delivery: "direct"` in its
+`labels.json`. Existing pages without that field remain server-delivered, and republishing,
+editing, switching versions, deletion/restoration preserve the page's setting. No migration or
+publisher action is required. Use the updated gateway for normal publishing; legacy clients
+publishing with their own bucket key (`--direct`) must be upgraded to persist this setting.
+
+The gateway permits direct delivery by default (`ONTIC_PAGES_DIRECT_FILES=1`). Before deploying,
+configure bucket CORS. Both `check` and `install` first validate the proposed `pages.caddy` with the installed Caddy,
+using a temporary wrapper with the required on-demand TLS permission. Both also probe live GET/HEAD preflights with Range,
+Content-Type and X-Requested-With before writing runtime configuration or restarting services. No admin
+credentials are needed for this probe. Deployment refuses to proceed when direct delivery is
+enabled but CORS is missing, incomplete or unreachable; explicit `0` permits server-only rollback.
+
+Eligible CORS-mode GETs for data/media are redirected after authorization;
+HTML, CSS, scripts/workers, playlists, SVG/XML, glTF JSON, HEAD and browser no-cors/same-origin requests stay
+on the gateway. The bucket remains private. New pages should use `crossorigin="anonymous"` for
+images/video; `fetch()` already defaults to CORS. See the compatibility details in README.md.
+
+### Admin rollout, in this order
+
+1. **Save and merge the live CORS rules.** Use a B2 administrative application key with
+   `writeBuckets` and bucket-inspection rights. The account master key is not required. Do not
+   add these privileges to the gateway key. Authenticate the B2 CLI in the admin environment.
+   `b2 bucket update --cors-rules` replaces the whole rule list, so save the actual current
+   configuration and preserve every unrelated rule, including browser uploads:
+
+   ```sh
+   b2 bucket get ontic-pages > ontic-pages-bucket-before.json
+   jq '.corsRules' ontic-pages-bucket-before.json > ontic-pages-cors-before.json
+   jq '[{"corsRuleName": "page-files",
+         "allowedOrigins": ["https://*.pages.onticlabs.io"],
+         "allowedOperations": ["s3_get", "s3_head"],
+         "allowedHeaders": ["*"],
+         "exposeHeaders": ["content-length", "content-range", "etag"],
+         "maxAgeSeconds": 3600}]
+       + [.[] | select(.corsRuleName != "page-files")]' \
+       ontic-pages-cors-before.json > ontic-pages-cors-proposed.json
+   diff -u ontic-pages-cors-before.json ontic-pages-cors-proposed.json
+   # Review the diff, then apply it:
+   b2 bucket update --cors-rules "$(cat ontic-pages-cors-proposed.json)" ontic-pages
+   b2 bucket get ontic-pages > ontic-pages-bucket-after.json
+   jq '{bucketType, corsRules}' ontic-pages-bucket-after.json
+   ```
+
+   Confirm `bucketType` is still `allPrivate`, all unrelated rules survived, and the
+   `overview-uploads` PUT rule is present. If it is absent, add that rule from the overview
+   section below to the saved list before applying. B2 explicitly supports the subdomain
+   wildcard above: [CORS rule syntax](https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules).
+   Adapt origins if serving a different content domain. CORS does not grant access to unsigned
+   private-bucket URLs.
+
+2. **Deploy the merged revision using root-capable SSH to `ontic-vps`.** The deployment script
+   deploys the local branch, so explicitly select and update `main` after this PR is merged:
+
+   ```sh
+   git switch main
+   git pull --ff-only origin main
+   git rev-parse HEAD                    # record the intended revision
+   # Retain the complete existing deploy/secrets.env, mode 600.
+   # Set ONTIC_PAGES_DIRECT_FILES=1, or omit it for the default.
+   deploy/deploy.sh ontic-vps
+   deploy/deploy.sh ontic-vps status
+   ```
+
+   `deploy.sh` copies the complete secrets file, builds the image and restarts the services.
+   The box needs `python3` for the credential-free CORS probe. The gateway's existing `readFiles`
+   key signs downloads; no additional runtime privilege,
+   DNS record or OAuth change is required. The existing root deployment handles the environment
+   file, container rebuild and Caddy validation/reload. The log filters explicitly use `wrap json`
+   for Caddy 2.6/2.7 compatibility. Install validates the combined configuration and reloads Caddy
+   before writing gateway settings or building the image, so a rejected Caddy configuration
+   cannot leave new direct-delivery code ready to restart behind the old logging configuration. Verify the running image revision
+   (inspect the container image ID, then its `org.opencontainers.image.revision` label) and inspect
+   only `ONTIC_PAGES_DIRECT_FILES` in `/etc/ontic-pages/gateway.env`, not other secret values.
+   An absent value means enabled. The `check` subcommand also updates the remote checkout and
+   copies secrets, although it does not install/restart services.
+
+3. **Verify actual B2/browser behavior before declaring the rollout complete.** Use a new test
+   page with JSON, CSS dependencies, modules, a worker, canvas images, a GLB and a seekable video:
+
+   - A pre-existing page remains server-delivered, including after a new version is published.
+   - The new page's eligible files show `302` at the gateway followed by `200`/`206` at B2;
+     HTML/CSS/scripts, HEAD and non-CORS images remain on the gateway. The redirect has
+     `Cache-Control: private, no-store`. Confirm bucket Content-Type and CORS headers.
+   - Video seeks return the expected `206` and `Content-Range`; test a Range preflight too.
+     Inspect `Origin` and `Access-Control-Allow-Origin` for the actual page subdomain.
+     Test a jQuery-style JSON request with `X-Requested-With: XMLHttpRequest` and a fetch with
+     `Content-Type: application/json`; both must pass the B2 preflight and load JSON.
+     Separately test explicit `credentials: "include"`/XHR `withCredentials` against live B2:
+     these require credentialed CORS response headers, which the local bucket does not model
+     and the preflight deployment probe does not guarantee. Use `mode: "same-origin"` for
+     fetches that must retain credentialed delivery through the gateway.
+   - Nested modules, CSS images/fonts and workers load; CORS-enabled images work in canvas/WebGL.
+     Publish another version with changed JSON/media and verify a populated browser cache sees it.
+   - Test public, team and private access in separate sessions. A non-owner cannot open a private
+     page; a signed-out request cannot obtain fresh links to protected files.
+   - After a link is over one hour old, it fails for a new bucket request. Reloading the page
+     while authorized obtains fresh links. A tab holding an expired URL may need a reload before
+     a later seek/download. Test seeking after that reload.
+   - Confirm existing overview composer uploads still succeed. Check the composer preview for
+     existing and newly dropped images/video, on public, team and private pages. Confirm Caddy access logs omit `Location` while the browser still receives it.
+     Check service health and gateway logs; the automated deployment health check alone does not exercise direct delivery.
+
+### Access lifetime and rollback
+
+The accepted link lifetime is one hour. Audio/video links are freshly signed on each gateway
+request so playback does not start with an aged grant. Other links may be reused for 50 minutes.
+An issued URL is a bearer credential for that one file: it remains valid after logout, visibility changes, deletion, a
+per-page mode change, or disabling direct delivery. Browser-cached/downloaded bytes cannot be
+revoked. New requests to original gateway URLs still check authorization and page state.
+
+For a global rollback, set **`ONTIC_PAGES_DIRECT_FILES=0`** in the complete existing secrets file
+and redeploy. Clearing or omitting the setting enables the default and is NOT rollback. Stored
+page settings remain intact, so a later re-enable restores direct delivery only for direct pages.
+For an individual incompatible page, its owner can use `ontic-pages delivery <name> server`;
+this is a recovery control, not a required publishing step.
+
+With this revision's uncacheable redirects, subsequent gateway requests use the server after
+rollback. If the original PR #15 was previously deployed, browsers may retain its cached
+redirects for up to 59 minutes; validate with a fresh browser context as well. Already-issued
+bucket URLs work until expiry in either case. The CORS rule can remain. If restoring CORS is
+necessary, first check for intervening admin changes and merge them rather than overwriting them
+with a stale backup. Do not make the bucket public or rotate the runtime key for routine rollback.
+
 ## What changed with the research overview
 
 - **One-time: a CORS rule on the bucket**, so the overview's composer can PUT images and videos
   straight to B2 with the presigned URLs (bytes still never pass the gateway or Caddy). Run it
-  once with a B2 key that may change buckets (the account key), not the gateway's:
+  once with an administrative B2 key with `writeBuckets`, not the gateway's:
 
-  ```sh
-  b2 bucket update --cors-rules '[{"corsRuleName": "overview-uploads",
-    "allowedOrigins": ["https://pages.onticlabs.io"], "allowedOperations": ["s3_put"],
-    "allowedHeaders": ["content-type"], "exposeHeaders": ["etag"], "maxAgeSeconds": 3600}]' \
-    ontic-pages
+  Preserve all current rules using the read/merge/review procedure in "Direct delivery" above.
+  The upload rule to include in that list is:
+
+  ```json
+  {"corsRuleName": "overview-uploads",
+   "allowedOrigins": ["https://pages.onticlabs.io"], "allowedOperations": ["s3_put"],
+   "allowedHeaders": ["content-type"], "exposeHeaders": ["etag"], "maxAgeSeconds": 3600}
   ```
 
   Without it everything works but uploads from the browser: the composer says the bucket

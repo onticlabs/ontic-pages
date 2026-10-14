@@ -67,9 +67,12 @@ def test_raw_html_and_bad_addresses_stay_text():
 
 def test_videos():
     out = render("![run 3](media/run.MP4?x=1) ![plot](media/plot.png)")
-    assert '<video controls preload="metadata" playsinline src="media/run.MP4?x=1">' in out
+    assert (
+        '<video controls preload="metadata" playsinline src="media/run.MP4?x=1" '
+        'crossorigin="anonymous">' in out
+    )
     assert '<a href="media/run.MP4?x=1">run 3</a></video>' in out
-    assert '<img src="media/plot.png" alt="plot" loading="lazy">' in out
+    assert '<img src="media/plot.png" alt="plot" loading="lazy" crossorigin="anonymous">' in out
 
 
 def test_title_of():
@@ -118,3 +121,17 @@ def test_nasty_inputs_are_quick(source):
     start = time.monotonic()
     render(source)
     assert time.monotonic() - start < 3
+
+
+def test_external_media_keeps_its_request_mode():
+    out = render("![external](https://example.com/a.png) ![v](//example.com/a.mp4)")
+    assert "crossorigin=" not in out
+
+
+def test_preview_media_preserves_credentials_and_needs_no_bucket_cors():
+    source = "![plot](media/plot.png) ![clip](media/clip.mp4)"
+    preview = render(source, media_cors=False)
+    assert "<img" in preview and "<video" in preview
+    assert "crossorigin" not in preview
+    # Per-render options cannot leak between concurrent preview and publish calls.
+    assert render(source).count('crossorigin="anonymous"') == 2

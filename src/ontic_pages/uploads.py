@@ -33,6 +33,7 @@ from .publish import (
     labels,
     markdown_files,
     new_version,
+    page_lock,
     page_record,
     version_iso,
 )
@@ -281,5 +282,6 @@ class Uploads:
             name, version, up.who, up.description, up.meta, up.git,
             len(up.files) + len(made) + kept, tagged, title, fmt,
         )  # fmt: skip
-        finish(self.store, page, up.visibility, up.people)
+        with page_lock(name):
+            finish(self.store, page, up.visibility, up.people)
         return page, up.visibility

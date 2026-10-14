@@ -25,9 +25,7 @@ from __future__ import annotations
 
 import html
 import re
-import threading
 import time
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from html.entities import html5
 from html.parser import HTMLParser
@@ -41,6 +39,7 @@ from .publish import (
     kept_labels,
     new_version,
     page_json,
+    page_lock,
     page_record,
 )
 from .store import VERSION_RE, Store
@@ -55,16 +54,6 @@ SKIP = frozenset(
     {"script", "style", "title", "template", "svg", "math", "canvas", "noscript", "textarea"}
 )
 STALE = "a newer version was published meanwhile: reload the page and edit again"
-
-_guard = threading.Lock()
-_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
-
-
-def page_lock(name: str) -> threading.Lock:
-    """One save per page at a time in this process."""
-    with _guard:
-        return _locks[name]
-
 
 # --- where the text is in the source ------------------------------------------------------
 

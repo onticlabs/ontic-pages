@@ -1,6 +1,6 @@
 # ontic-pages: agent notes
 
-Simple HTML hosting for the team: `ontic-pages login|publish|list|info|pull|share|set-current|url|comments|comment|resolve|gateway`.
+Simple HTML hosting for the team: `ontic-pages login|publish|list|info|pull|share|delivery|set-current|url|comments|comment|resolve|gateway`.
 The commands talk to the gateway with a token from `login`; `--direct` uses a bucket key instead.
 See README.md for what it does and deploy/README.md for how it is hosted.
 
@@ -33,7 +33,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files and file lists, page state);
-  a saved edit seeds them with what it wrote.
+  a saved edit seeds them with what it wrote. `DirectLinks`: the presigned GET URLs handed out
+  with direct files on (reuse non-media URLs for 50 minutes; freshly sign audio/video).
 - `src/ontic_pages/comments.py`: comments, one `<name>/comments.json` per page written only by the
   gateway (read-modify-write under a lock per page, cached a few seconds); cleaning of comment
   text and anchors; deleted comments stay as tombstones.
@@ -82,6 +83,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   `test_edit_js.py` the served edit mode, `test_details_js.py` the Details panel,
   `test_share_js.py` the Share panel's people, each with a small fake DOM (all skipped without
   node).
+- `tests/test_direct_files_browser.py`: optional Chromium/Playwright regression suite, run with
+  `uv run --with playwright --with nodejs-wheel pytest -q`; CHROMIUM_PATH selects the browser.
+  `direct_bucket.py` models private grants, expiry, Range and CORS without production credentials.
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
 
 ## Rules
@@ -95,8 +99,12 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - Keep it small. Provenance is metadata in `page.json`, never checked.
 - The tool never deletes anything from the bucket. Deleting a page sets `deleted` in its
   `labels.json`: hidden everywhere, 404 at its address, restorable.
-- File bytes never pass through the gateway (Caddy caps bodies at 64 KB on purpose): they go to
-  presigned URLs. Only the gateway holds a bucket key in normal use.
+- Uploaded file bytes go to presigned URLs (Caddy caps request bodies at 64 KB). Download
+  delivery is per page in labels.json: missing means server; only new names default to direct.
+  Preserve it across publishes, edits and version switches. Direct mode redirects eligible
+  CORS GETs for data/media; dependencies, HEAD and no-cors/same-origin browser requests remain
+  on the gateway. Redirects are private, no-store. ONTIC_PAGES_DIRECT_FILES=0 is global rollback;
+  omitted/empty defaults to enabled. Only the gateway holds a bucket key in normal use.
 - Add or update a test for every behavior change; when you use a new boto3 call, add it to the fake.
 - Never commit `deploy/secrets.env` or any credential.
 - Never use em dashes in any text.

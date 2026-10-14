@@ -22,7 +22,7 @@ UNITS="pages.network pages-gateway.container pages-oauth2-proxy.container"
 REQUIRED="GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET OAUTH2_COOKIE_SECRET OAUTH2_EMAIL_DOMAIN"
 REQUIRED="$REQUIRED ONTIC_PAGES_BUCKET ONTIC_PAGES_ENDPOINT ONTIC_PAGES_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY"
 REQUIRED="$REQUIRED ONTIC_PAGES_TOKEN_SECRET"
-OPTIONAL="ONTIC_PAGES_PREFIX ONTIC_PAGES_GITHUB_TOKEN ONTIC_PAGES_GITHUB_REPO ONTIC_PAGES_GITHUB_OWNER"
+OPTIONAL="ONTIC_PAGES_PREFIX ONTIC_PAGES_GITHUB_TOKEN ONTIC_PAGES_GITHUB_REPO ONTIC_PAGES_GITHUB_OWNER ONTIC_PAGES_DIRECT_FILES"
 
 die() { echo "pages.sh: $*" >&2; exit 1; }
 
@@ -61,7 +61,34 @@ check_box() {
         || die "/etc/caddy/Caddyfile does not validate as it stands; fix that first"
     grep -Eq 'ask[[:space:]]+http://127\.0\.0\.1:8790/_tls-ask' /etc/caddy/Caddyfile \
         || die "/etc/caddy/Caddyfile has no global 'on_demand_tls { ask http://127.0.0.1:8790/_tls-ask }'; add it (deploy/README.md)"
-    echo "ok    podman, systemctl, caddy; Caddyfile imports conf.d, asks /_tls-ask and validates"
+    # Validate the proposed site with the installed Caddy, not just the existing config.
+    # In particular, unsupported log-filter syntax must fail before env/image changes.
+    check_proposed_caddy || die "proposed pages.caddy does not validate; runtime configuration and image unchanged"
+    echo "ok    podman, systemctl, caddy; existing Caddyfile and proposed pages.caddy validate"
+}
+
+# The site needs the same on-demand permission as the main Caddyfile. Keep the temporary
+# validation wrapper outside /etc so check does not modify installed configuration.
+check_proposed_caddy() (
+    candidate=$(mktemp)
+    trap 'rm -f "$candidate"' EXIT HUP INT TERM
+    cat > "$candidate" <<EOF
+{
+    on_demand_tls {
+        ask http://127.0.0.1:8790/_tls-ask
+    }
+}
+import "$HERE/pages.caddy"
+EOF
+    caddy validate --config "$candidate" --adapter caddyfile >/dev/null 2>&1
+)
+
+check_download_cors() {
+    setting=$(val ONTIC_PAGES_DIRECT_FILES | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$setting" in ""|1|true|yes) ;; *) return ;; esac
+    command -v python3 >/dev/null || die "python3 is required for the live download CORS check"
+    python3 "$HERE/check-cors.py" "$(val ONTIC_PAGES_ENDPOINT)" "$(val ONTIC_PAGES_BUCKET)" \
+        || die "download CORS is not ready; services were not changed"
 }
 
 write_etc() {
@@ -83,13 +110,7 @@ do_install() {
     [ "$(id -u)" = 0 ] || die "install must run as root"
     check_secrets
     check_box
-    write_etc
-    podman build -t "$IMAGE" --build-arg "REVISION=$(git -C "$CHECKOUT" rev-parse --short HEAD)" \
-        --ignorefile "$HERE/Dockerfile.dockerignore" -f "$HERE/Dockerfile" "$CHECKOUT"
-    for u in $UNITS; do install -m 0644 "$HERE/$u" "$QUADLET/$u"; done
-    systemctl daemon-reload
-    systemctl restart pages-network.service pages-gateway.service pages-oauth2-proxy.service
-    echo "ok    units started"
+    check_download_cors
     backup=$(mktemp)
     [ -f "$SITE" ] && cp "$SITE" "$backup"
     install -m 0640 -o root -g caddy "$HERE/pages.caddy" "$SITE"
@@ -100,11 +121,19 @@ do_install() {
     fi
     rm -f "$backup"
     systemctl reload caddy
+    # Install log redaction before changing runtime settings or the image used on restart.
+    write_etc
+    podman build -t "$IMAGE" --build-arg "REVISION=$(git -C "$CHECKOUT" rev-parse --short HEAD)" \
+        --ignorefile "$HERE/Dockerfile.dockerignore" -f "$HERE/Dockerfile" "$CHECKOUT"
+    for u in $UNITS; do install -m 0644 "$HERE/$u" "$QUADLET/$u"; done
+    systemctl daemon-reload
+    systemctl restart pages-network.service pages-gateway.service pages-oauth2-proxy.service
+    echo "ok    units started"
     echo "ok    caddy reloaded; https://pages.onticlabs.io/ should redirect to Google sign-in"
 }
 
 case $MODE in
-check) check_secrets; check_box; echo "check passed; run: $0 install" ;;
+check) check_secrets; check_box; check_download_cors; echo "check passed; run: $0 install" ;;
 install) do_install ;;
 status)
     for u in pages-network pages-oauth2-proxy pages-gateway; do
