@@ -12,6 +12,7 @@ import json
 import os
 import secrets
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -22,6 +23,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .config import command_name, token_path
+from .crossorigin import fix_media
 from .publish import collect, git_provenance, html_title, read_markdown
 
 POLL_SECONDS = 2.0
@@ -208,6 +210,17 @@ def publish(
     people, url}. A pillar, tags or milestone left as None keep the current version's. A .md
     file goes as Markdown (the gateway renders it) with the files it points at. People go
     with a private visibility: whom it is shared with besides its owner."""
+    with tempfile.TemporaryDirectory() as tmp:
+        return _publish(
+            api, source, name, description, meta, visibility, cwd, pillar, tags, milestone,
+            title, people, Path(tmp),
+        )  # fmt: skip
+
+
+def _publish(
+    api, source, name, description, meta, visibility, cwd, pillar, tags, milestone, title, people,
+    tmp: Path,
+) -> dict:  # fmt: skip
     markdown = None
     if source.suffix.lower() == ".md" and source.is_file():
         markdown, files = read_markdown(source)
@@ -215,6 +228,7 @@ def publish(
     else:
         files = collect(source)
         title = title or html_title(files.get("index.html", Path()))
+        fix_media(files, tmp)
     sizes = {rel: path.stat().st_size for rel, path in files.items()}
     start = {
         "description": description,

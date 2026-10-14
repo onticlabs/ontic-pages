@@ -13,12 +13,14 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import threading
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from .crossorigin import fix_media
 from .store import (
     DEFAULT_PILLAR,
     PILLARS,
@@ -344,9 +346,12 @@ def publish(
     else:
         files, made, fmt = collect(source), {}, "html"
         title = clean_title(title) or html_title(files.get("index.html", Path()))
-    for rel, path in files.items():
-        with path.open("rb") as fh:
-            store.put(store.key(name, version, rel), fh)
+    with tempfile.TemporaryDirectory() as tmp:
+        if fmt == "html":
+            fix_media(files, Path(tmp))
+        for rel, path in files.items():
+            with path.open("rb") as fh:
+                store.put(store.key(name, version, rel), fh)
     for rel, data in made.items():
         store.put(store.key(name, version, rel), data)
     page = page_record(

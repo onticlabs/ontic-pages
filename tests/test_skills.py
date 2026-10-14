@@ -15,8 +15,8 @@ OLD_MARKER = (
     "edits, ONTIC_AGENT_SKILLS=0 to stop -->"
 )
 # SKILL.md as of skills.REVISION. When the text changes, bump the revision with it.
-SKILL_SHA256 = "c9d6fe3a53f8f0548405a963a2bd536c893066e62fbd0544e11b5a8c4b3e0810"
-SKILL_REVISION = 10
+SKILL_SHA256 = "39139cd6571b6d778e6cd7e40045b5b4b04aba89ddc09454e46bce3d457dd960"
+SKILL_REVISION = 11
 
 
 @pytest.fixture
