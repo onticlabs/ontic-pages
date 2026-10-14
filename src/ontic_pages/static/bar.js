@@ -21,6 +21,11 @@
   var pending = null; // the next version's frame while it loads
   var pendingTimer = 0;
   var VERSION_PATH = /^\/_v\/(\d{8}T\d{6}Z)(\/.*)?$/;
+  var peopleTyped = false; // the Share panel's people changed and not saved yet
+  // One visibility change at a time: a later one could otherwise answer first and an earlier
+  // one undo it (a person taken off the list back on). A Save meanwhile waits for it, with the
+  // list as it was when pressed (a later press replaces it): {people, text} or null.
+  var sharing = false, queued = null;
 
   function $(id) { return document.getElementById(id); }
   function frame() { return $("frame"); }
@@ -278,11 +283,19 @@
     document.body.setAttribute("data-visibility", page.visibility);
     var select = $("s-access");
     select.value = page.visibility;
-    select.disabled = page.role !== "owner";
+    select.disabled = page.role !== "owner" || sharing;
     $("s-note").hidden = page.role === "owner";
     var option = select.options[select.selectedIndex];
     $("s-explain").textContent = option ? option.getAttribute("data-explain") : "";
     $("s-owner").textContent = page.published_by || "Sign in to see who";
+    // A private page's people: the owner edits the list, the people it is shared with see it.
+    var people = page.people || [], owns = page.role === "owner", field = $("s-people");
+    if (field) {
+      $("s-people-box").hidden = page.visibility !== "private" || (!owns && !people.length);
+      if (!peopleTyped) field.value = people.join(", "); // typed text stays until saved
+      field.readOnly = !owns;
+      $("s-people-save").hidden = !owns;
+    }
     features.forEach(function (f) { if (f.render) f.render(); });
   }
 
@@ -317,30 +330,54 @@
     }
   }
 
-  function setVisibility(level) {
-    var select = $("s-access"), error = $("s-error");
+  // The level and, for private, the whole list of people (none: only the owner). `text`: the
+  // field as it was when Save was pressed; typed text that differs from it is kept.
+  function setVisibility(level, people, text) {
+    if (sharing) return;
+    sharing = true;
+    var select = $("s-access"), error = $("s-error"), field = $("s-people");
     error.hidden = true;
     select.disabled = true;
     fetch("/_api/pages/" + encodeURIComponent(name) + "/visibility", {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ visibility: level })
+      body: JSON.stringify({ visibility: level, people: people || [] })
     }).then(function (response) {
       return response.json().then(function (body) { return { ok: response.ok, body: body }; });
     }).then(function (result) {
       if (result.ok && result.body && result.body.name === name) {
         page = result.body;
+        if (!field || text === undefined || field.value === text) peopleTyped = false;
       } else {
         error.textContent = (result.body && result.body.error) || "Could not change it.";
         error.hidden = false;
       }
-      render();
+      shared();
     }, function () {
       error.textContent = "Could not reach the server.";
       error.hidden = false;
-      render();
+      shared();
     });
+  }
+
+  function shared() {
+    sharing = false;
+    render();
+    if (queued) {
+      var next = queued;
+      queued = null;
+      setVisibility("private", next.people, next.text);
+    }
+  }
+
+  // The owner's list as typed in the Share panel when pressed; while a change runs, exactly that
+  // list is sent once it is done (never what is typed after the press).
+  function savePeople() {
+    var text = $("s-people").value;
+    var people = text.split(/[\s,;]+/).filter(Boolean);
+    if (sharing) queued = { people: people, text: text };
+    else setVisibility("private", people, text);
   }
 
   // ---- live updates: a new current version fades in where you were -------------------------
@@ -434,6 +471,14 @@
     $("s-access").addEventListener("change", function (event) {
       if (event.target.value !== page.visibility) setVisibility(event.target.value);
     });
+    var field = $("s-people");
+    if (field) {
+      $("s-people-save").addEventListener("click", savePeople);
+      field.addEventListener("input", function () { peopleTyped = true; });
+      field.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && page.role === "owner") savePeople();
+      });
+    }
     var signin = $("signin");
     if (signin) {
       signin.addEventListener("click", function () {

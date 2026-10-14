@@ -140,9 +140,9 @@ class FileCache:
 
 
 class PageCache:
-    """(current version, visibility, owner) and the versions of each page, kept for `ttl`
-    seconds so a page with many assets costs one lookup. The owner is the current version's
-    published_by.
+    """(current version, visibility, owner, people) and the versions of each page, kept for
+    `ttl` seconds so a page with many assets costs one lookup. The owner is the current
+    version's published_by; people are those a private page is shared with (Store.access).
 
     Every change the gateway makes to a page (visibility, current, a publish) ends with
     forget(), which also counts up the page's generation. A value read before a forget is never
@@ -156,11 +156,11 @@ class PageCache:
         self.lists: dict[str, tuple[float, list[str]]] = {}
         self.generations: dict[str, int] = {}
 
-    def get(self, name: str) -> tuple[str | None, str, str]:
+    def get(self, name: str) -> tuple[str | None, str, str, tuple[str, ...]]:
         return self.snapshot(name)[2]
 
-    def snapshot(self, name: str) -> tuple[int, float, tuple[str | None, str, str]]:
-        """(generation, when the value was read, (current, visibility, owner))."""
+    def snapshot(self, name: str) -> tuple[int, float, tuple[str | None, str, str, tuple]]:
+        """(generation, when the value was read, (current, visibility, owner, people))."""
         now = time.monotonic()
         with self.lock:
             hit = self.entries.get(name)
@@ -168,9 +168,9 @@ class PageCache:
         if hit and now - hit[0] < self.ttl:
             return generation, hit[0], hit[1]
         version = self.store.current(name)
-        visibility = self.store.visibility(name)
+        visibility, people = self.store.access(name)
         owner = self.files.meta(name, version).get("published_by", "") if version else ""
-        value = (version, visibility, owner)
+        value = (version, visibility, owner, people)
         with self.lock:
             if self.generations.get(name, 0) == generation:
                 self.entries[name] = (now, value)
@@ -194,13 +194,13 @@ class PageCache:
         self,
         name: str,
         snapshot: tuple[int, float, tuple],
-        value: tuple[str, str, str],
+        value: tuple[str, str, str, tuple],
         versions: list[str] | None,
     ) -> bool:
-        """What a saved edit made true: (current, visibility, owner), and the versions when
-        known, kept as old as the snapshot the save started from (its visibility was read
-        then). Only when nothing changed the page since that snapshot; otherwise the page is
-        forgotten, so the next request reads it fresh. True when kept."""
+        """What a saved edit made true: (current, visibility, owner, people), and the versions
+        when known, kept as old as the snapshot the save started from (its visibility and
+        people were read then). Only when nothing changed the page since that snapshot;
+        otherwise the page is forgotten, so the next request reads it fresh. True when kept."""
         generation, read_at, _ = snapshot
         with self.lock:
             if self.generations.get(name, 0) != generation:

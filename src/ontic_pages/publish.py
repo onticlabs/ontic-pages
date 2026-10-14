@@ -22,6 +22,7 @@ from .store import (
     PILLARS,
     Store,
     check_name,
+    check_people,
     check_pillar,
     check_tags,
     check_visibility,
@@ -262,10 +263,10 @@ def page_json(page: dict) -> bytes:
     return json.dumps(page, indent=2).encode()
 
 
-def finish(store: Store, page: dict, visibility: str | None) -> str:
+def finish(store: Store, page: dict, visibility: str | None, people=()) -> str:
     """After the files: page.json, labels.json (the labels of this version, not deleted), then
-    the visibility (only when given; a later publish without it keeps the level), then flip
-    `current`. Returns page.json's ETag (may be empty)."""
+    the visibility and its people (only when given; a later publish without it keeps both),
+    then flip `current`. Returns page.json's ETag (may be empty)."""
     name, version = page["name"], page["version"]
     # Delivery belongs to the page, not a version. Missing on an existing page means server;
     # only the first successful publication of a new name defaults to direct delivery.
@@ -279,7 +280,7 @@ def finish(store: Store, page: dict, visibility: str | None) -> str:
     # The labels start again from this version (and a deleted page is back).
     store.set_labels(name, {**{k: page.get(k) for k in LABEL_KEYS}, "delivery": delivery})
     if visibility is not None:
-        store.set_visibility(name, visibility)
+        store.set_visibility(name, visibility, people)
     store.set_current(name, version)
     return etag
 
@@ -298,16 +299,19 @@ def publish(
     tags: list[str] | None = None,
     milestone: str | None = None,
     title: str = "",
+    people: list[str] | None = None,
 ) -> dict:
-    """Upload the files, then page.json, then the visibility (only when given; a later publish
-    without it keeps the level), then flip `current`. Returns page.json. The pillar, tags and
-    milestone, when not given, are those of the current version; the title, when not given,
-    is the page's own (<title>, or the Markdown's first heading). A .md source is rendered."""
+    """Upload the files, then page.json, then the visibility and, for private, the people it is
+    shared with (only when given; a later publish without it keeps both), then flip `current`.
+    Returns page.json. The pillar, tags and milestone, when not given, are those of the current
+    version; the title, when not given, is the page's own (<title>, or the Markdown's first
+    heading). A .md source is rendered."""
     from .milestones import load_milestones
 
     check_name(name)
     if visibility is not None:
         check_visibility(visibility)
+    people = check_people(visibility or "", people or [])
 
     def find(milestone_id: str) -> dict | None:
         return next((m for m in load_milestones(store) if m.get("id") == milestone_id), None)
@@ -335,7 +339,7 @@ def publish(
         name, version, who, description, meta or {}, git_provenance(cwd or Path.cwd()),
         len(files) + len(made), tagged, title, fmt,
     )  # fmt: skip
-    finish(store, page, visibility)
+    finish(store, page, visibility, people)
     return page
 
 

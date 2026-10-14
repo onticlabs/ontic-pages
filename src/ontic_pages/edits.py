@@ -306,8 +306,8 @@ def save(
         # (and it is asked again right before `current` is written).
         # The page's state as it is now, with its generation: kept after the commit only if no
         # other change to the page (visibility, current, a publish) came in meanwhile.
-        snapshot = pages.snapshot(name) if pages else (0, 0.0, (None, "", ""))
-        current, visibility, _ = snapshot[2]
+        snapshot = pages.snapshot(name) if pages else (0, 0.0, (None, "", "", ()))
+        current, visibility, _, people = snapshot[2]
         if current != version:
             current = store.current(name)
         if not current:
@@ -393,5 +393,5 @@ def save(
                 versions = sorted({*listed.result(), current, new})
             except Exception:  # the list is asked again when needed
                 versions = None
-            pages.put(name, snapshot, (new, visibility, who), versions)
+            pages.put(name, snapshot, (new, visibility, who, people), versions)
     return page

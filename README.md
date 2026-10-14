@@ -3,8 +3,8 @@
 Simple HTML hosting for the Ontic Labs team. Publish a folder or one HTML file
 under a name, and it is served at `https://pages.onticlabs.io/<name>/`, inside a
 slim bar (title menu with the versions, comments, Share panel), from its own host
-`https://<name>.pages.onticlabs.io/`. Each page is private (only you), ontic (the
-signed-in team, the default) or public (anyone with the link). Each publish is a
+`https://<name>.pages.onticlabs.io/`. Each page is private (only you, or you and a few
+people you name), ontic (the signed-in team, the default) or public (anyone with the link). Each publish is a
 new version; nothing is ever deleted. The owner can also fix text right on the
 page in the browser (no Edit button: it is always on for them); Save writes that as a new
 version too.
@@ -74,6 +74,7 @@ ontic-pages list --name depth-eval   # its versions, newest first, * marks the c
 ontic-pages info depth-eval          # everything page.json says, plus the versions
 ontic-pages set-current depth-eval 20261007T153000Z   # serve an older (or newer) version
 ontic-pages share depth-eval public  # private, ontic or public
+ontic-pages share depth-eval private --with ana@onticlabs.io   # you and Ana only
 ontic-pages url depth-eval           # its URL
 ontic-pages label depth-eval --pillar data --tag eval   # change labels, no new version
 ontic-pages delete depth-eval        # hide it everywhere (files kept); restore brings it back
@@ -308,13 +309,25 @@ root of its own host, so `/img/a.png` and `img/a.png` both work.
 
 | visibility | who | URL |
 |---|---|---|
-| `private` | only the publisher of the current version, signed in with that Google account | `/<name>/` |
+| `private` | only the publisher of the current version, and the people it is shared with, each signed in with that Google account | `/<name>/` |
 | `ontic` (default) | anyone signed in with an `@onticlabs.io` Google account | `/<name>/` |
 | `public` | anyone with the link, no sign-in | `/<name>/` (old `/public/<name>/` links redirect there) |
 
 Visibility belongs to the page, not to a version. `publish --visibility` sets it;
 a later publish without the flag keeps it. `share <name> <level>`, or the Share
 panel in the bar (for the page's owner), changes it.
+
+A private page can also be shared with a few named people: `share <name> private --with
+a@onticlabs.io --with b@onticlabs.io`, or `publish ... --visibility private --with ...`. They
+must be `@onticlabs.io` addresses (the gateway checks its `--email-domain`; `--direct` checks
+`onticlabs.io`), at most 50; they are kept lowercase and sorted. A gateway from before people
+ignores them: `--with` then fails and says so (`share` before changing anything). They open, list, comment, relabel and read the info like team members on
+an ontic page; publishing, `share`, `set-current`, editing text and deleting stay with the owner. Only
+`private` takes people: `--with` with another level is refused, and each `share` (or publish
+with `--visibility`) sets the whole list, so sharing at another level, or `private` without
+`--with`, leaves nobody but the owner on it. In the bar's Share panel the owner edits the list
+(emails separated by commas, Save or Enter); the people on it see it there read-only. `info` and
+`list` show it.
 For `private`, the publisher is matched by email: through the gateway that is always the
 address you signed in with; with `--direct` it is `ONTIC_PAGES_EMAIL` (or `git config
 user.email`), so use the address you sign in with. `publish` and `share` print who that is. The info page (`/<name>/_info`) always needs sign-in,
@@ -323,7 +336,10 @@ even for public pages.
 ## In the bucket
 
     <name>/current                 the current version id
-    <name>/visibility              private, ontic or public (absent means ontic)
+    <name>/visibility              private, ontic or public (absent means ontic); after
+                                   private, one email per line: the people it is shared with
+                                   (a gateway from before people reads that as private,
+                                   owner only)
     <name>/comments.json           the comment threads, written by the gateway only
     <name>/labels.json             pillar, tags, milestone, title as changed since the last
                                    publish (over page.json), and deleted
@@ -377,7 +393,7 @@ page.json and version ids stay in UTC.
   page with what page.json says and every version; `/_api/pages/<name>` gives the
   page facts as JSON, `/_api/pages/<name>/versions/<version>` one version's details for the
   bar's Details panel (signed in), and `POST /_api/pages/<name>/visibility` changes visibility
-  (owner only, from the bar or the command line); `POST /_api/pages/<name>/edits` saves text
+  (`{"visibility": "private", "people": [...]}`, owner only, from the bar or the command line); `POST /_api/pages/<name>/edits` saves text
   edited in the bar (owner only). `/_api/pages/<name>/comments` reads the comment threads and
   takes new ones, replies, resolve and delete (signed in, from the bar or the command line). The
   command line uses the rest of `/_api/` (list, info, current, publish, files for `pull`) and
@@ -439,7 +455,7 @@ The bar: the home link, the title menu (who published, when, the description, th
 versions, Copy link, Open without the bar, Details, All pages), an "old version"
 marker, the info button (Details), the comment button (signed in only), the edit counter with
 Save and Discard (the owner, only once a text changed; see Edit text in place), your initial (or
-Sign in), and Share (owner, general access, Copy link). Escape or a click elsewhere, in the page
+Sign in), and Share (owner, general access, the people of a private page, Copy link). Escape or a click elsewhere, in the page
 too, closes a menu.
 
 The info button (an "i" in a circle, left of the comment button) and the title menu's Details

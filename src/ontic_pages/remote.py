@@ -202,10 +202,12 @@ def publish(
     tags: list[str] | None = None,
     milestone: str | None = None,
     title: str = "",
+    people: list[str] | None = None,
 ) -> dict:
     """Publish through the gateway. Returns its commit answer: {page (page.json), visibility,
-    url}. A pillar, tags or milestone left as None keep the current version's. A .md file goes
-    as Markdown (the gateway renders it) with the files it points at."""
+    people, url}. A pillar, tags or milestone left as None keep the current version's. A .md
+    file goes as Markdown (the gateway renders it) with the files it points at. People go
+    with a private visibility: whom it is shared with besides its owner."""
     markdown = None
     if source.suffix.lower() == ".md" and source.is_file():
         markdown, files = read_markdown(source)
@@ -219,6 +221,7 @@ def publish(
         "meta": dict(meta or {}),
         "git": git_provenance(cwd or Path.cwd()),
         "visibility": visibility,
+        "people": list(people or []),
         "pillar": pillar,
         "tags": tags,
         "milestone": milestone,
