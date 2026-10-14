@@ -22,6 +22,9 @@
   var pendingTimer = 0;
   var VERSION_PATH = /^\/_v\/(\d{8}T\d{6}Z)(\/.*)?$/;
   var peopleTyped = false; // the Share panel's people changed and not saved yet
+  // One visibility change at a time: a later one could otherwise answer first and an earlier
+  // one undo it (a person taken off the list back on). Save meanwhile waits for it.
+  var sharing = false, shareAgain = false;
 
   function $(id) { return document.getElementById(id); }
   function frame() { return $("frame"); }
@@ -279,7 +282,7 @@
     document.body.setAttribute("data-visibility", page.visibility);
     var select = $("s-access");
     select.value = page.visibility;
-    select.disabled = page.role !== "owner";
+    select.disabled = page.role !== "owner" || sharing;
     $("s-note").hidden = page.role === "owner";
     var option = select.options[select.selectedIndex];
     $("s-explain").textContent = option ? option.getAttribute("data-explain") : "";
@@ -328,7 +331,10 @@
 
   // The level and, for private, the whole list of people (none: only the owner).
   function setVisibility(level, people) {
-    var select = $("s-access"), error = $("s-error");
+    if (sharing) return;
+    sharing = true;
+    var select = $("s-access"), error = $("s-error"), field = $("s-people");
+    var sent = field ? field.value : "";
     error.hidden = true;
     select.disabled = true;
     fetch("/_api/pages/" + encodeURIComponent(name) + "/visibility", {
@@ -341,17 +347,35 @@
     }).then(function (result) {
       if (result.ok && result.body && result.body.name === name) {
         page = result.body;
-        peopleTyped = false;
+        if (!field || field.value === sent) peopleTyped = false; // else typed meanwhile: kept
       } else {
         error.textContent = (result.body && result.body.error) || "Could not change it.";
         error.hidden = false;
       }
-      render();
+      shared();
     }, function () {
       error.textContent = "Could not reach the server.";
       error.hidden = false;
-      render();
+      shared();
     });
+  }
+
+  function shared() {
+    sharing = false;
+    render();
+    if (shareAgain) {
+      shareAgain = false;
+      savePeople();
+    }
+  }
+
+  // The owner's list as typed in the Share panel; while a change runs, sent once it is done.
+  function savePeople() {
+    if (sharing) {
+      shareAgain = true;
+      return;
+    }
+    setVisibility("private", $("s-people").value.split(/[\s,;]+/).filter(Boolean));
   }
 
   // ---- live updates: a new current version fades in where you were -------------------------
@@ -446,9 +470,6 @@
       if (event.target.value !== page.visibility) setVisibility(event.target.value);
     });
     var field = $("s-people");
-    var savePeople = function () {
-      setVisibility("private", field.value.split(/[\s,;]+/).filter(Boolean));
-    };
     if (field) {
       $("s-people-save").addEventListener("click", savePeople);
       field.addEventListener("input", function () { peopleTyped = true; });

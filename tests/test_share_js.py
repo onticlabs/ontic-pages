@@ -38,7 +38,8 @@ const fetches = [], answers = [];
 function fetch(url, options) {
   fetches.push([url, options.method, JSON.parse(options.body)]);
   const a = answers.shift();
-  return Promise.resolve({ ok: a.ok, status: a.status, json: () => Promise.resolve(a.body) });
+  const response = { ok: a.ok, status: a.status, json: () => Promise.resolve(a.body) };
+  return a.gate ? a.gate.then(() => response) : Promise.resolve(response);
 }
 const location = { origin: APEX, href: APEX + "/report/", hash: "", assign() {} };
 vm.runInNewContext(SOURCE, { window, document, location, history: { replaceState() {} }, URL,
@@ -47,7 +48,28 @@ fire(document, "DOMContentLoaded");
 const error = byId("s-error");
 (async () => {
   const out = { first: [box.hidden, field.value, field.readOnly, save.hidden] };
-  if (ROLE !== "owner") {
+  if (RACE) {
+    // Save [a, b], take b off and save again before the first answer: the second is sent only
+    // after it, so b cannot come back; the select stays disabled meanwhile.
+    let release;
+    const both = Object.assign({}, PAGE, { people: ["a@onticlabs.io", "b@onticlabs.io"] });
+    answers.push({ ok: true, status: 200, body: both, gate: new Promise((r) => (release = r)) });
+    answers.push({ ok: true, status: 200, body: Object.assign({}, PAGE,
+      { people: ["a@onticlabs.io"] }) });
+    field.value = "a@onticlabs.io, b@onticlabs.io";
+    fire(field, "input");
+    save.click();
+    field.value = "a@onticlabs.io";
+    fire(field, "input");
+    fire(field, "keydown", { key: "Enter" });
+    for (let i = 0; i < 5; i++) await tick();
+    out.running = [fetches.map((f) => f[2].people), access.disabled];
+    release();
+    for (let i = 0; i < 10; i++) await tick();
+    out.done = [fetches.map((f) => f[2].people), field.value, access.disabled];
+    for (let i = 0; i < 10; i++) await tick();
+    out.calls = fetches.length;
+  } else if (ROLE !== "owner") {
     fire(field, "keydown", { key: "Enter" });
     out.enter = fetches.length;
   } else {
@@ -70,8 +92,8 @@ const error = byId("s-error");
 """
 
 
-def share(role: str, people: list[str]) -> dict:
-    return run(SHARE, served("bar.js"), ROLE=role, PEOPLE=people)
+def share(role: str, people: list[str], race: bool = False) -> dict:
+    return run(SHARE, served("bar.js"), ROLE=role, PEOPLE=people, RACE=race)
 
 
 def test_owner_edits_the_people():
@@ -87,6 +109,14 @@ def test_owner_edits_the_people():
     # Saved (Enter): the field shows the list as the gateway keeps it.
     sent = {"visibility": "private", "people": ["b@onticlabs.io"]}
     assert out["saved"] == [[[url, "POST", sent]], "a@onticlabs.io, b@onticlabs.io", True]
+
+
+def test_one_change_at_a_time():
+    out = share("owner", ["a@onticlabs.io", "b@onticlabs.io"], race=True)
+    assert out["running"] == [[["a@onticlabs.io", "b@onticlabs.io"]], True]
+    # The second save goes out once, after the first answer, with what was typed last.
+    sent = [["a@onticlabs.io", "b@onticlabs.io"], ["a@onticlabs.io"]]
+    assert out["done"] == [sent, "a@onticlabs.io", False] and out["calls"] == 2
 
 
 def test_people_see_the_list_read_only():

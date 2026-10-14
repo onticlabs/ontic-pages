@@ -319,8 +319,9 @@ panel in the bar (for the page's owner), changes it.
 
 A private page can also be shared with a few named people: `share <name> private --with
 a@onticlabs.io --with b@onticlabs.io`, or `publish ... --visibility private --with ...`. They
-must be `@onticlabs.io` addresses (the gateway's `--email-domain`), at most 50; they are kept
-lowercase and sorted. They open, list, comment, relabel and read the info like team members on
+must be `@onticlabs.io` addresses (the gateway checks its `--email-domain`; `--direct` checks
+`onticlabs.io`), at most 50; they are kept lowercase and sorted. A gateway from before people
+ignores them: `--with` then fails and says so (`share` before changing anything). They open, list, comment, relabel and read the info like team members on
 an ontic page; publishing, `share`, `set-current`, editing text and deleting stay with the owner. Only
 `private` takes people: `--with` with another level is refused, and each `share` (or publish
 with `--visibility`) sets the whole list, so sharing at another level, or `private` without

@@ -64,11 +64,12 @@ SECRET = "test-secret-" + "x" * 32
 
 def start_local(store, **kwargs):
     """A gateway whose apex is its own address, http://127.0.0.1:<port>, so the command line
-    can talk to it with ONTIC_PAGES_URL. With a token secret."""
+    can talk to it with ONTIC_PAGES_URL. With a token secret; `email_domain` its team's."""
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    kwargs.setdefault("site", Site(f"http://127.0.0.1:{port}", email_domain="onticlabs.io"))
+    domain = kwargs.pop("email_domain", "onticlabs.io")
+    kwargs.setdefault("site", Site(f"http://127.0.0.1:{port}", email_domain=domain))
     kwargs.setdefault("identity", cookie_identity)
     kwargs.setdefault("ttl", 0)
     kwargs.setdefault("token_secret", SECRET)

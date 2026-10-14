@@ -51,10 +51,20 @@ def given_milestone(args) -> str | None:
 
 
 def given_people(args, level: str | None) -> list[str]:
-    """--with (repeatable): whom a private page is shared with besides you, checked."""
+    """--with (repeatable): whom a private page is shared with besides you, checked. The domain
+    only with --direct; through the gateway, the gateway checks its own (--email-domain)."""
     if args.people and level != "private":
         raise SystemExit("--with shares a private page: give the private level with it")
-    return check_people(level or "", args.people, EMAIL_DOMAIN)
+    return check_people(level or "", args.people, EMAIL_DOMAIN if direct(args) else "")
+
+
+NO_PEOPLE = "the gateway does not support sharing with people yet (update it); "
+
+
+def check_shared(answer: dict, people: list[str], what: str) -> None:
+    """A gateway from before people ignores them: say so instead of reporting success."""
+    if people and answer.get("people") != people:
+        raise SystemExit(NO_PEOPLE + what)
 
 
 def given_tags(args) -> list[str] | None:
@@ -113,6 +123,7 @@ def cmd_publish(args) -> None:
         )  # fmt: skip
         page = done["page"]
         print(f"published {page['name']} version {page['version']} ({page['files']} files)")
+        check_shared(done, people, f"{args.name} is private to you alone")
         if done.get("visibility") == "private":
             owner_note(page["published_by"], done.get("people") or [])
         print(cfg.page_url(args.name))
@@ -135,8 +146,11 @@ def cmd_share(args) -> None:
     people = given_people(args, args.visibility)
     if not direct(args):
         api, cfg = open_api()
+        if people and "people" not in api.get(remote.page_path(args.name)):  # before changing
+            raise SystemExit(NO_PEOPLE + f"{args.name} is unchanged")
         body = {"visibility": args.visibility, "people": people}
         page = api.post(remote.page_path(args.name, "visibility"), body)
+        check_shared(page, people, f"{args.name} is now private to you alone")
         print(f"{args.name} is now {page['visibility']}")
         if page["visibility"] == "private":
             owner_note(page.get("published_by", ""), page.get("people") or [])
@@ -436,16 +450,17 @@ def build_parser() -> argparse.ArgumentParser:
         "page keeps its level and people",
     )
     s.add_argument("--with", dest="people", action="append", default=[], metavar="EMAIL",
-                   help="with --visibility private: someone at @onticlabs.io who may open it "
-                   "too, repeatable")  # fmt: skip
+                   help="with --visibility private: a team email (at the gateway's domain, "
+                   "@onticlabs.io) that may open it too, repeatable")  # fmt: skip
     s.set_defaults(func=cmd_publish)
 
     s = sub.add_parser("share", parents=[key], help="change who can open a page")
     s.add_argument("name")
     s.add_argument("visibility", choices=VISIBILITIES, help=LEVELS)
     s.add_argument("--with", dest="people", action="append", default=[], metavar="EMAIL",
-                   help="private only: someone at @onticlabs.io who may open it too, repeatable; "
-                   "the list replaces the old one (none: only you)")  # fmt: skip
+                   help="private only: a team email (at the gateway's domain, @onticlabs.io) "
+                   "that may open it too, repeatable; the list replaces the old one (none: "
+                   "only you)")  # fmt: skip
     s.set_defaults(func=cmd_share)
 
     s = sub.add_parser(

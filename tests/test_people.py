@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from helpers import FRAME, ORIGIN, content, request
 
+from ontic_pages import remote
 from ontic_pages.auth import allowed
 from ontic_pages.cli import main
 from ontic_pages.publish import publish
@@ -145,6 +146,7 @@ def test_cli_direct(cli_env, site, capsys, monkeypatch):
         (["share", "report", "ontic", "--with", FRIEND], "--with shares a private page"),
         (["publish", str(site), "--name", "report", "--with", FRIEND], "--with shares"),
         (["share", "report", "private", "--with", "x@gmail.com"], "bad email"),
+        (["share", "report", "private", "--with", "f@example.org"], "bad email"),  # --direct
     ]:
         with pytest.raises(SystemExit, match=error):
             main(argv)
@@ -171,3 +173,45 @@ def test_cli_through_the_gateway(local, gateway_env, store, uploads, site, capsy
     assert f"shared with {OTHER}" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="only the owner"):
         main(["share", "report", "private", "--with", OTHER, "--with", FRIEND])
+
+
+def test_cli_against_a_gateway_without_people(
+    local, gateway_env, store, uploads, site, monkeypatch
+):
+    """A gateway from before people drops them and never answers them: say so, not success."""
+    srv = local()
+    gateway_env(srv, OWNER)
+    main(["publish", str(site), "--name", "report"])
+    real = remote.Api.json
+
+    def old(self, method, path, body=None):
+        if isinstance(body, dict):
+            body = {k: v for k, v in body.items() if k != "people"}
+        answer = real(self, method, path, body)
+        answer.pop("people", None)
+        return answer
+
+    monkeypatch.setattr(remote.Api, "json", old)
+    with pytest.raises(SystemExit, match="does not support sharing with people yet.*unchanged"):
+        main(["share", "report", "private", "--with", FRIEND])
+    assert store.access("report") == ("ontic", ())  # asked before changing anything
+    with pytest.raises(SystemExit, match="does not support sharing.*private to you alone"):
+        main(["publish", str(site), "--name", "report", "--visibility", "private",
+              "--with", FRIEND])  # fmt: skip
+    assert store.access("report") == ("private", ())
+    main(["share", "report", "ontic"])  # without people it works as before
+    assert store.access("report") == ("ontic", ())
+
+
+def test_cli_leaves_the_domain_to_the_gateway(local, gateway_env, store, uploads, site):
+    """Through a gateway with another --email-domain, its domain counts, not onticlabs.io."""
+    srv = local(email_domain="example.org")
+    gateway_env(srv, "boss@example.org")
+    main(["publish", str(site), "--name", "report", "--visibility", "private",
+          "--with", "f@example.org"])  # fmt: skip
+    assert store.access("report") == ("private", ("f@example.org",))
+    with pytest.raises(SystemExit, match="bad email.*@example.org"):
+        main(["share", "report", "private", "--with", FRIEND])
+    with pytest.raises(SystemExit, match="bad email"):  # not an email at all: refused here
+        main(["share", "report", "private", "--with", "not-an-email"])
+    assert store.access("report") == ("private", ("f@example.org",))
