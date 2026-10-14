@@ -1,5 +1,6 @@
 """Direct delivery is per page, with browser fallbacks and fresh access checks."""
 
+import threading
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -244,6 +245,43 @@ def test_gateway_publish_defaults_only_new_names_to_direct(store, site):
         up, _ = uploads.start(name, TEAM, {"markdown": "# New page", "files": []})
         uploads.commit(name, up.version, TEAM)
         assert store.labels(name)["delivery"] == expected
+
+
+def test_delivery_change_during_a_publish_is_kept(local, store, site, monkeypatch):
+    """A publish reads labels.json, then writes it back with the delivery it read; a change
+    made in between waits for the publish instead of being overwritten."""
+    publish(store, site, "report", now=T1, published_by=OWNER)
+    server = local(direct_files=True)
+    up, _ = Uploads(store).start("report", OWNER, {"markdown": "# Update", "files": []})
+    reading, go = threading.Event(), threading.Event()
+    put = store.put
+
+    def slow_put(key, data, *args, **kwargs):
+        if key.endswith(f"/{up.version}/page.json"):  # after the publish read labels.json
+            reading.set()
+            go.wait(5)
+        return put(key, data, *args, **kwargs)
+
+    monkeypatch.setattr(store, "put", slow_put)
+    uploads = Uploads(store)
+    uploads.pending[("report", up.version)] = up
+    publishing = threading.Thread(target=uploads.commit, args=("report", up.version, OWNER))
+    publishing.start()
+    assert reading.wait(5)
+    answers = []
+    changing = threading.Thread(
+        target=lambda: answers.append(
+            call(server, "/_api/pages/report/delivery", OWNER, {"delivery": "server"})[0]
+        )
+    )
+    changing.start()
+    changing.join(0.3)
+    assert changing.is_alive()  # waits for the publish
+    go.set()
+    publishing.join(5)
+    changing.join(5)
+    assert answers == [200]
+    assert store.labels("report")["delivery"] == "server"
 
 
 def test_owner_setting_and_cli(local, gateway_env, store, site, capsys):

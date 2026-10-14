@@ -106,7 +106,7 @@ from .info import (
 )
 from .milestones import ID_RE as MILESTONE_ID_RE
 from .milestones import VIEW_ID_RE, Milestones, Views, now
-from .publish import LABEL_KEYS, MARKDOWN_FILE, clean_title, effective
+from .publish import LABEL_KEYS, MARKDOWN_FILE, clean_title, effective, page_lock
 from .pull import presigned_files
 from .shell import (
     Assets,
@@ -1005,9 +1005,10 @@ def make_handler(gw: Gateway):
                 if m.group(2) == "visibility":
                     gw.store.set_visibility(name, level, people)
                 elif m.group(2) == "delivery":
-                    labels = {**gw.labels.get(name), "delivery": delivery}
-                    gw.store.set_labels(name, labels)
-                    gw.labels.put(name, labels)
+                    with page_lock(name):  # not between a publish's read and write of labels
+                        labels = {**gw.store.labels(name), "delivery": delivery}
+                        gw.store.set_labels(name, labels)
+                        gw.labels.put(name, labels)
                 else:
                     gw.store.set_current(name, version)
                 gw.pages.forget(name)
