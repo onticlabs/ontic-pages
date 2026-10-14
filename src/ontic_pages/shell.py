@@ -33,7 +33,7 @@ from .info import PILLAR_LABELS, stamp
 from .store import content_type
 
 ACCESS = {
-    "private": ("Private", "Only the owner can open it, signed in."),
+    "private": ("Private", "Only the owner and the people listed below can open it, signed in."),
     "ontic": ("Team", "Anyone signed in with an @{domain} account can open it."),
     "public": ("Public", "Anyone with the link can open it, without signing in."),
 }
@@ -279,6 +279,11 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 <label class="label" for="s-access">General access</label>
 <select id="s-access"{"" if owner_can else " disabled"}>{options}</select>
 <p class="muted" id="s-explain">{e(explain)}</p>
+<div id="s-people-box" hidden>
+<label class="label" for="s-people">Shared with</label>
+<input id="s-people" type="text" autocomplete="off" spellcheck="false" placeholder="name@{e(page["email_domain"])}, ...">
+<button class="item" type="button" id="s-people-save" hidden>Save people</button>
+</div>
 <p class="muted" id="s-note"{" hidden" if owner_can else ""}>Only the owner can change this.</p>
 <p class="error" id="s-error" hidden></p>
 <div class="sep"></div>

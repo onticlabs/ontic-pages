@@ -21,6 +21,7 @@
   var pending = null; // the next version's frame while it loads
   var pendingTimer = 0;
   var VERSION_PATH = /^\/_v\/(\d{8}T\d{6}Z)(\/.*)?$/;
+  var peopleTyped = false; // the Share panel's people changed and not saved yet
 
   function $(id) { return document.getElementById(id); }
   function frame() { return $("frame"); }
@@ -283,6 +284,14 @@
     var option = select.options[select.selectedIndex];
     $("s-explain").textContent = option ? option.getAttribute("data-explain") : "";
     $("s-owner").textContent = page.published_by || "Sign in to see who";
+    // A private page's people: the owner edits the list, the people it is shared with see it.
+    var people = page.people || [], owns = page.role === "owner", field = $("s-people");
+    if (field) {
+      $("s-people-box").hidden = page.visibility !== "private" || (!owns && !people.length);
+      if (!peopleTyped) field.value = people.join(", "); // typed text stays until saved
+      field.readOnly = !owns;
+      $("s-people-save").hidden = !owns;
+    }
     features.forEach(function (f) { if (f.render) f.render(); });
   }
 
@@ -317,7 +326,8 @@
     }
   }
 
-  function setVisibility(level) {
+  // The level and, for private, the whole list of people (none: only the owner).
+  function setVisibility(level, people) {
     var select = $("s-access"), error = $("s-error");
     error.hidden = true;
     select.disabled = true;
@@ -325,12 +335,13 @@
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ visibility: level })
+      body: JSON.stringify({ visibility: level, people: people || [] })
     }).then(function (response) {
       return response.json().then(function (body) { return { ok: response.ok, body: body }; });
     }).then(function (result) {
       if (result.ok && result.body && result.body.name === name) {
         page = result.body;
+        peopleTyped = false;
       } else {
         error.textContent = (result.body && result.body.error) || "Could not change it.";
         error.hidden = false;
@@ -434,6 +445,17 @@
     $("s-access").addEventListener("change", function (event) {
       if (event.target.value !== page.visibility) setVisibility(event.target.value);
     });
+    var field = $("s-people");
+    var savePeople = function () {
+      setVisibility("private", field.value.split(/[\s,;]+/).filter(Boolean));
+    };
+    if (field) {
+      $("s-people-save").addEventListener("click", savePeople);
+      field.addEventListener("input", function () { peopleTyped = true; });
+      field.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && page.role === "owner") savePeople();
+      });
+    }
     var signin = $("signin");
     if (signin) {
       signin.addEventListener("click", function () {

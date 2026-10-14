@@ -15,7 +15,8 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /_api/pages/<name>/files       a version's files with presigned GET URLs (pull.py)
     GET  /_api/pages                    the pages this viewer may open (signed in)
     GET  /_api/me                       who is asking
-    POST /_api/pages/<name>/visibility  {"visibility": ...}, by the owner only
+    POST /_api/pages/<name>/visibility  {"visibility": ..., "people": [emails]} (people only
+                                        with private), by the owner only
     POST /_api/pages/<name>/current     {"version": ...}, by the owner only
     POST /_api/pages/<name>/versions    publish: start (uploads.py); then .../<version>/files for
                                         more of the file list, and .../<version>/commit
@@ -53,8 +54,9 @@ On any host: GET /_health. On other hosts only (Caddy asks on 127.0.0.1): GET /_
 Who is asking comes from oauth2-proxy (auth.py), never from identity request headers, or from a
 signed token (`Authorization: Bearer`, the command line, tokens.py), which is refused from a
 browser (any Origin or Sec-Fetch-Site). Access, checked before every answer: public anyone,
-ontic an @<email domain> address, private the current version's publisher. Writes go to the apex
-only: from the apex itself (Sec-Fetch-Site, Origin) or with a token.
+ontic an @<email domain> address, private the current version's publisher and the people it is
+shared with (at the email domain too). Writes go to the apex only: from the apex itself
+(Sec-Fetch-Site, Origin) or with a token.
 """
 
 from __future__ import annotations
@@ -119,6 +121,7 @@ from .store import (
     VISIBILITIES,
     Store,
     check_name,
+    check_people,
     content_type,
 )
 from .tokens import LoginCodes, check_secret, sign, verify
@@ -227,6 +230,7 @@ class Gateway:
         self.views = Views(store, ttl)
         self.labels = LabelCache(store, ttl)
         self.uploads.find = self.milestones.find
+        self.uploads.domain = site.email_domain
         self.sync: Sync | None = None  # the GitHub milestone sync, when it runs (github.py)
         self._upload_origin: str | None = None
 
@@ -276,33 +280,35 @@ class Gateway:
         """Every milestone but those in the bin."""
         return [m for m in self.milestones.items() if not m.get("deleted")]
 
-    def lookup(self, name: str) -> tuple[str | None, str, str]:
-        """(current, visibility, owner) of a page to serve: a deleted one has no current."""
-        version, visibility, owner = self.pages.get(name)
+    def lookup(self, name: str) -> tuple[str | None, str, str, tuple[str, ...]]:
+        """(current, visibility, owner, people) of a page to serve: a deleted one has no
+        current."""
+        version, visibility, owner, people = self.pages.get(name)
         if version and self.labels.get(name).get("deleted"):
-            return None, visibility, owner
-        return version, visibility, owner
+            return None, visibility, owner, people
+        return version, visibility, owner, people
 
     def meta(self, name: str, version: str) -> dict:
         """The current version's page.json with the labels changed since (labels.json)."""
         return effective(self.files.meta(name, version), self.labels.get(name))
 
     def visible(self, email: str, deleted: bool = False):
-        """(name, current, visibility, owner, page.json with its labels) of each page this viewer
-        may open; with deleted, only the deleted ones this viewer owns."""
+        """(name, current, visibility, owner, page.json with its labels, people) of each page
+        this viewer may open; with deleted, only the deleted ones this viewer owns."""
+        domain = self.site.email_domain
         for name in self.store.names():
-            version, visibility, owner = self.pages.get(name)
-            if not version or not allowed(visibility, owner, email, self.site.email_domain):
+            version, visibility, owner, people = self.pages.get(name)
+            if not version or not allowed(visibility, owner, email, domain, people):
                 continue
             if bool(self.labels.get(name).get("deleted")) != deleted:
                 continue
             if deleted and owner.strip().lower() != email.strip().lower():
                 continue
-            yield name, version, visibility, owner, self.meta(name, version)
+            yield name, version, visibility, owner, self.meta(name, version), people
 
     def facts(self, name: str, email: str) -> dict:
         """What the bar shows. Emails only for a signed-in viewer."""
-        current, visibility, owner = self.pages.get(name)
+        current, visibility, owner, people = self.pages.get(name)
         versions = []
         for version in reversed(self.pages.versions(name)):
             meta = self.files.meta(name, version)
@@ -324,6 +330,7 @@ class Gateway:
         return {
             "name": name,
             "visibility": visibility,
+            "people": list(people) if email else [],
             "current": current,
             "published_by": owner if email else "",
             "role": "owner" if email and email.lower() == owner.strip().lower() else "viewer",
@@ -344,8 +351,8 @@ class Gateway:
         }
 
 
-def report(name: str, version: str, visibility: str, owner: str, meta: dict) -> dict:
-    """One row of the overview's reports table."""
+def report(name: str, version: str, visibility: str, owner: str, meta: dict, people=()) -> dict:
+    """One row of the overview's reports table (people: whom a private one is shared with)."""
     milestone = meta.get("milestone")
     return {
         "name": name,
@@ -358,6 +365,7 @@ def report(name: str, version: str, visibility: str, owner: str, meta: dict) -> 
         "author": owner,
         "published_at": meta.get("published_at") or "",
         "visibility": visibility,
+        "people": list(people),
         "format": meta.get("format") or "html",
     }
 
@@ -377,7 +385,7 @@ def listing_html(gw: Gateway, email: str, query: str = "") -> str:
     tag = asked.get("tag", [""])[0].strip().lower()
     counts = {p: 0 for p in PILLARS}
     rows = []
-    for name, version, visibility, owner, meta in gw.visible(email):
+    for name, version, visibility, owner, meta, _ in gw.visible(email):
         if tag and tag not in tags_of(meta):
             continue
         counts[pillar_of(meta)] += 1
@@ -474,13 +482,14 @@ def make_handler(gw: Gateway):
                     return ""
             return self.who
 
-        def may_open(self, name: str, visibility: str, owner: str, url: str, page=True) -> bool:
+        def may_open(self, name: str, visibility: str, owner: str, people, url: str,
+                     page=True) -> bool:  # fmt: skip
             """Answer and return False unless this viewer may open the page. Signed out, a page
             load goes to sign-in and anything else gets 401."""
             if visibility == "public":
                 return True
             email = self.email()
-            if allowed(visibility, owner, email, site.email_domain):
+            if allowed(visibility, owner, email, site.email_domain, people):
                 return True
             if email:
                 self.forbidden(name, visibility)
@@ -535,7 +544,11 @@ def make_handler(gw: Gateway):
             self.send_body(code, b"", {"Location": location})
 
         def forbidden(self, name: str, visibility: str):
-            who = "its publisher" if visibility == "private" else f"@{site.email_domain} accounts"
+            who = (
+                "its owner and the people they share it with"
+                if visibility == "private"
+                else f"@{site.email_domain} accounts"
+            )
             self.send_html(
                 403,
                 f"<!doctype html><title>Not allowed</title><p>{html.escape(name)} is a "
@@ -638,16 +651,16 @@ def make_handler(gw: Gateway):
                 return self.send_text(404, "not found\n")
             if not slash:
                 return self.redirect(f"/{quote(name)}/{q}")
-            version, visibility, owner = gw.lookup(name)
+            version, visibility, owner, people = gw.lookup(name)
             if not version:
                 return self.send_text(404, f"no page named {name}\n")
             here = f"{site.origin}{quote(path)}{q}"
-            if not self.may_open(name, visibility, owner, here):
+            if not self.may_open(name, visibility, owner, people, here):
                 return
             if rest == "_info":
                 if not self.email():  # metadata stays signed in, even for public pages
                     return self.redirect(site.sign_in(here), 302)
-                page = info_html(name, *history(gw.store, name), visibility)
+                page = info_html(name, *history(gw.store, name), visibility, people)
                 return self.send_html(200, page)
             viewing = None
             if m := VERSIONED.match(rest):
@@ -679,17 +692,18 @@ def make_handler(gw: Gateway):
         # --- the JSON API (apex only) -------------------------------------------------------
 
         def api_page(self, name: str, required: bool):
-            """(current, visibility, owner, email) after the access check, else None (answered)."""
+            """(current, visibility, owner, email, people) after the access check, else None
+            (answered)."""
             if not NAME_RE.match(name) or name in RESERVED_NAMES:
                 return self.send_json(404, {"error": "no such page"})
-            version, visibility, owner = gw.lookup(name)
+            version, visibility, owner, people = gw.lookup(name)
             if not version:
                 return self.send_json(404, {"error": f"no page named {name}"})
             email = self.email(required=required or visibility != "public")
-            if not allowed(visibility, owner, email, site.email_domain):
+            if not allowed(visibility, owner, email, site.email_domain, people):
                 code, error = (403, "not allowed") if email else (401, "sign in first")
                 return self.send_json(code, {"error": error})
-            return version, visibility, owner, email
+            return version, visibility, owner, email, people
 
         def api_get(self, name: str):
             if found := self.api_page(name, required=False):
@@ -702,7 +716,8 @@ def make_handler(gw: Gateway):
                     return self.send_json(401, {"error": EXPIRED})
                 current, metas = history(gw.store, name)
                 self.send_json(200, {
-                    "name": name, "current": current, "visibility": found[1], "versions": metas,
+                    "name": name, "current": current, "visibility": found[1],
+                    "people": list(found[4]), "versions": metas,
                 })  # fmt: skip
 
         def api_version(self, name: str, version: str):
@@ -742,6 +757,7 @@ def make_handler(gw: Gateway):
                 {
                     "name": name,
                     "visibility": visibility,
+                    "people": list(people),
                     "current": version,
                     "published_by": owner,
                     "published_at": meta.get("published_at", ""),
@@ -751,7 +767,7 @@ def make_handler(gw: Gateway):
                     "title": meta.get("title") or "",
                     "milestone": meta.get("milestone") or "",
                 }
-                for name, version, visibility, owner, meta in gw.visible(email)
+                for name, version, visibility, owner, meta, people in gw.visible(email)
             ]
             self.send_json(200, {"pages": pages})
 
@@ -909,7 +925,7 @@ def make_handler(gw: Gateway):
                 found = self.api_page(name, required=True)
                 if not found:
                     return
-                _, _, owner, email = found
+                owner, email = found[2], found[3]
                 if not email:
                     return self.send_json(401, {"error": EXPIRED})
                 if not gw.limit.allow(email.lower()):
@@ -921,6 +937,10 @@ def make_handler(gw: Gateway):
                     if level not in VISIBILITIES:
                         error = "visibility: private, ontic or public"
                         return self.send_json(400, {"error": error})
+                    try:  # the whole list: absent or empty shares with nobody
+                        people = check_people(level, data.get("people") or [], site.email_domain)
+                    except ValueError as err:
+                        return self.send_json(400, {"error": str(err)})
                 else:
                     version = data.get("version")
                     if (
@@ -932,7 +952,7 @@ def make_handler(gw: Gateway):
                 if email.strip().lower() != owner.strip().lower():
                     return self.send_json(403, {"error": "only the owner can change this"})
                 if m.group(2) == "visibility":
-                    gw.store.set_visibility(name, level)
+                    gw.store.set_visibility(name, level, people)
                 else:
                     gw.store.set_current(name, version)
                 gw.pages.forget(name)
@@ -1044,7 +1064,7 @@ def make_handler(gw: Gateway):
             found = self.api_page(name, required=True)
             if not found:
                 return
-            current, visibility, owner, email = found
+            current, visibility, owner, email, people = found
             if not email:
                 raise Refused(401, EXPIRED)
             if not gw.team(email):
@@ -1070,14 +1090,14 @@ def make_handler(gw: Gateway):
             gw.labels.put(name, labels)
             self.log_message("labels %s", name)
             self.send_json(200, {"report": report(name, current, visibility, owner,
-                                                  gw.meta(name, current))})  # fmt: skip
+                                                  gw.meta(name, current), people)})  # fmt: skip
 
         def delete_page(self, name: str, data):
             """The owner deletes a page, or brings it back ({"deleted": false}): it is hidden
             everywhere and its addresses answer 404; nothing is removed from the bucket."""
             if not NAME_RE.match(name):
                 raise Refused(404, "no such page")
-            current, visibility, owner = gw.pages.get(name)
+            current, _, owner, _ = gw.pages.get(name)
             if not current:
                 raise Refused(404, f"no page named {name}")
             email = self.email()
@@ -1107,7 +1127,7 @@ def make_handler(gw: Gateway):
             if not email:
                 raise Refused(401, EXPIRED)
             gw.pages.forget(name)
-            current, _, owner = gw.pages.get(name)
+            current, _, owner, _ = gw.pages.get(name)
             if current and email.strip().lower() != owner.strip().lower():
                 raise Refused(
                     403,
@@ -1143,8 +1163,9 @@ def make_handler(gw: Gateway):
             page, _ = gw.uploads.commit(name, version, email)
             gw.pages.forget(name)
             self.log_message("publish commit %s %s", name, version)
+            visibility, people = gw.store.access(name)
             self.send_json(200, {
-                "page": page, "visibility": gw.store.visibility(name),
+                "page": page, "visibility": visibility, "people": list(people),
                 "url": f"{site.origin}/{quote(name)}/",
             })  # fmt: skip
 
@@ -1179,7 +1200,7 @@ def make_handler(gw: Gateway):
             rest = path[1:]
             if bad_path(rest):
                 return self.send_text(404, "not found\n")
-            current, visibility, owner = gw.lookup(name)
+            current, visibility, owner, people = gw.lookup(name)
             if not current:
                 return self.send_text(404, f"no page named {name}\n")
             version, base = current, "/"
@@ -1194,7 +1215,8 @@ def make_handler(gw: Gateway):
             if dest == "document" and not raw and not itself:
                 return self.redirect(f"{site.origin}/{quote(name)}{quote(path)}{q}", 302)
             here = f"{site.content_origin(name)}{quote(path)}{q}"
-            if not self.may_open(name, visibility, owner, here, page=dest in ("document", "")):
+            if not self.may_open(name, visibility, owner, people, here,
+                                 page=dest in ("document", "")):  # fmt: skip
                 return
             self.send_content(name, version, rest, base, q, visibility, dest == "iframe")
 

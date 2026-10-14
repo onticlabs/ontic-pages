@@ -14,20 +14,25 @@ from . import comments_cli, gateway, milestones_cli, pull, remote, skills
 from .auth import DEFAULT_AUTH_URL
 from .cache import MB
 from .config import Config, command_name, load_config, token_path
-from .info import history, info_text, pillar_of, stamp, tags_of, version_stamp
+from .info import history, info_text, pillar_of, shared, stamp, tags_of, version_stamp
 from .milestones import EMAIL_RE
 from .publish import publish
 from .store import (
+    EMAIL_DOMAIN,
     PILLARS,
     VERSION_RE,
     VISIBILITIES,
     Store,
     check_name,
+    check_people,
     check_tags,
     make_client,
 )
 
-LEVELS = "private (only you), ontic (signed-in team, the default), public (anyone with the link)"
+LEVELS = (
+    "private (only you, and whom you add with --with), ontic (signed-in team, the default), "
+    "public (anyone with the link)"
+)
 
 
 def parse_meta(items: list[str]) -> dict[str, str]:
@@ -43,6 +48,13 @@ def parse_meta(items: list[str]) -> dict[str, str]:
 def given_milestone(args) -> str | None:
     """--milestone or --no-milestone; None keeps the current version's."""
     return "" if args.no_milestone else args.milestone
+
+
+def given_people(args, level: str | None) -> list[str]:
+    """--with (repeatable): whom a private page is shared with besides you, checked."""
+    if args.people and level != "private":
+        raise SystemExit("--with shares a private page: give the private level with it")
+    return check_people(level or "", args.people, EMAIL_DOMAIN)
 
 
 def given_tags(args) -> list[str] | None:
@@ -67,8 +79,12 @@ def open_api() -> tuple[remote.Api, Config]:
     return remote.Api(cfg.url, remote.load_token()), cfg
 
 
-def owner_note(owner: str) -> None:
-    print(f"private: only {owner or 'its publisher'} can open it, signed in with that address")
+def owner_note(owner: str, people=()) -> None:
+    if people:
+        who = ", ".join([owner or "its publisher", *people])
+        print(f"private: only {who} can open it, each signed in with that address")
+    else:
+        print(f"private: only {owner or 'its publisher'} can open it, signed in with that address")
 
 
 def url_for(store: Store, cfg: Config, name: str) -> str:
@@ -77,7 +93,8 @@ def url_for(store: Store, cfg: Config, name: str) -> str:
 
 def private_note(store: Store, name: str) -> None:
     current = store.current(name)
-    owner_note(store.meta(name, current).get("published_by", "") if current else "")
+    owner = store.meta(name, current).get("published_by", "") if current else ""
+    owner_note(owner, store.access(name)[1])
 
 
 def cmd_publish(args) -> None:
@@ -86,24 +103,25 @@ def cmd_publish(args) -> None:
     if source.is_dir() and not (source / "index.html").exists():
         print(f"warning: {source} has no index.html; the page URL will answer 404", file=sys.stderr)
     tags = given_tags(args)
+    people = given_people(args, args.visibility)
     if not direct(args):
         api, cfg = open_api()
         check_name(args.name)
         done = remote.publish(
             api, source, args.name, args.description, parse_meta(args.meta), args.visibility,
-            pillar=args.pillar, tags=tags, milestone=milestone, title=args.title,
+            pillar=args.pillar, tags=tags, milestone=milestone, title=args.title, people=people,
         )  # fmt: skip
         page = done["page"]
         print(f"published {page['name']} version {page['version']} ({page['files']} files)")
         if done.get("visibility") == "private":
-            owner_note(page["published_by"])
+            owner_note(page["published_by"], done.get("people") or [])
         print(cfg.page_url(args.name))
         return
     store, cfg = open_store(args)
     page = publish(
         store, source, args.name, args.description, parse_meta(args.meta),
         visibility=args.visibility, published_by=cfg.email, pillar=args.pillar, tags=tags,
-        milestone=milestone, title=args.title,
+        milestone=milestone, title=args.title, people=people,
     )  # fmt: skip
     print(f"published {page['name']} version {page['version']} ({page['files']} files)")
     if store.visibility(args.name) == "private":
@@ -112,19 +130,22 @@ def cmd_publish(args) -> None:
 
 
 def cmd_share(args) -> None:
+    """The level and, for private, the whole list of people (none given: nobody else)."""
     check_name(args.name)
+    people = given_people(args, args.visibility)
     if not direct(args):
         api, cfg = open_api()
-        page = api.post(remote.page_path(args.name, "visibility"), {"visibility": args.visibility})
+        body = {"visibility": args.visibility, "people": people}
+        page = api.post(remote.page_path(args.name, "visibility"), body)
         print(f"{args.name} is now {page['visibility']}")
         if page["visibility"] == "private":
-            owner_note(page.get("published_by", ""))
+            owner_note(page.get("published_by", ""), page.get("people") or [])
         print(cfg.page_url(args.name))
         return
     store, cfg = open_store(args)
     if not store.current(args.name):
         raise SystemExit(f"no page named {args.name}")
-    store.set_visibility(args.name, args.visibility)
+    store.set_visibility(args.name, args.visibility, people)
     print(f"{args.name} is now {args.visibility}")
     if args.visibility == "private":
         private_note(store, args.name)
@@ -149,7 +170,8 @@ def page_lines(pages: list[dict], args) -> list[str]:
             continue
         when = stamp(p.get("published_at")) or version_stamp(p.get("current", ""))
         line = f"{p['name']:32} {p['visibility']:8} {pillar:20} {when}  {p.get('description', '')}"
-        lines.append(line + ("  [" + ", ".join(tags) + "]" if tags else ""))
+        line += "  [" + ", ".join(tags) + "]" if tags else ""
+        lines.append(line + ("  shared with " + ", ".join(p["people"]) if p.get("people") else ""))
     return lines
 
 
@@ -163,7 +185,7 @@ def cmd_list(args) -> None:
         versions = store.versions(args.name)
         if not versions:
             raise SystemExit(f"no page named {args.name}")
-        print(f"visibility: {store.visibility(args.name)}")
+        print(f"visibility: {shared(*store.access(args.name))}")
         for version in reversed(versions):
             print(version_line(version, current, store.meta(args.name, version)))
         return
@@ -172,8 +194,9 @@ def cmd_list(args) -> None:
         current = store.current(name)
         if current and not store.labels(name).get("deleted"):
             meta = store.meta(name, current)
+            visibility, people = store.access(name)
             pages.append({**meta, "name": name, "current": current,
-                          "visibility": store.visibility(name)})  # fmt: skip
+                          "visibility": visibility, "people": list(people)})  # fmt: skip
     print("\n".join(page_lines(pages, args)))
 
 
@@ -182,7 +205,7 @@ def list_remote(args) -> None:
     if args.name:
         check_name(args.name)
         page = api.get(remote.page_path(args.name))
-        print(f"visibility: {page['visibility']}")
+        print(f"visibility: {shared(page['visibility'], page.get('people') or [])}")
         for v in page["versions"]:
             print(version_line(v["version"], page["current"], v))
         return
@@ -212,13 +235,14 @@ def cmd_info(args) -> None:
     if not direct(args):
         api, _ = open_api()
         page = api.get(remote.page_path(args.name, "info"))
-        print(info_text(args.name, page["current"], page["versions"], page["visibility"]))
+        people = page.get("people") or []
+        print(info_text(args.name, page["current"], page["versions"], page["visibility"], people))
         return
     store, _ = open_store(args)
     current, metas = history(store, args.name)
     if not metas:
         raise SystemExit(f"no page named {args.name}")
-    print(info_text(args.name, current, metas, store.visibility(args.name)))
+    print(info_text(args.name, current, metas, *store.access(args.name)))
 
 
 def cmd_pull(args) -> None:
@@ -409,13 +433,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--visibility",
         choices=VISIBILITIES,
         help=f"who can open it: {LEVELS}; without it a new page is ontic and an existing "
-        "page keeps its level",
+        "page keeps its level and people",
     )
+    s.add_argument("--with", dest="people", action="append", default=[], metavar="EMAIL",
+                   help="with --visibility private: someone at @onticlabs.io who may open it "
+                   "too, repeatable")  # fmt: skip
     s.set_defaults(func=cmd_publish)
 
     s = sub.add_parser("share", parents=[key], help="change who can open a page")
     s.add_argument("name")
     s.add_argument("visibility", choices=VISIBILITIES, help=LEVELS)
+    s.add_argument("--with", dest="people", action="append", default=[], metavar="EMAIL",
+                   help="private only: someone at @onticlabs.io who may open it too, repeatable; "
+                   "the list replaces the old one (none: only you)")  # fmt: skip
     s.set_defaults(func=cmd_share)
 
     s = sub.add_parser(
