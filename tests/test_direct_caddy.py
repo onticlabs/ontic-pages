@@ -16,11 +16,18 @@ CADDY = os.environ.get("CADDY_PATH") or shutil.which("caddy")
 pytestmark = pytest.mark.skipif(not CADDY, reason="needs Caddy (or CADDY_PATH)")
 
 
-@pytest.mark.parametrize("site", [0, 1])
-def test_redirect_location_is_sent_but_not_logged(tmp_path, site):
-    source = Path(__file__).resolve().parents[1] / "deploy/pages.caddy"
-    blocks = re.findall(r"\tlog \{.*?\n\t\}", source.read_text(), re.S)
-    assert len(blocks) == 2
+ROOT = Path(__file__).resolve().parents[1]
+# The live site file, and the same sites as an ontic-server app (its log block is a snippet).
+SITES = ["deploy/pages.caddy", "deploy/ontic-server/Caddyfile"]
+
+
+@pytest.mark.parametrize(
+    "source, site", [("deploy/pages.caddy", 0), ("deploy/pages.caddy", 1), (SITES[1], 0)]
+)
+def test_redirect_location_is_sent_but_not_logged(tmp_path, source, site):
+    text = (ROOT / source).read_text()
+    blocks = re.findall(r"^\tlog \{.*?\n\t\}", text, re.S | re.M)
+    assert len(blocks) == (2 if source == SITES[0] else 1)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -60,8 +67,9 @@ def test_redirect_location_is_sent_but_not_logged(tmp_path, site):
     assert "secret-test-grant" not in output.read_text()
 
 
-def test_proposed_site_validates_with_required_global_permission(tmp_path):
-    source = Path(__file__).resolve().parents[1] / "deploy/pages.caddy"
+@pytest.mark.parametrize("site", SITES)
+def test_proposed_site_validates_with_required_global_permission(tmp_path, site):
+    source = ROOT / site
     config = tmp_path / "Caddyfile"
     config.write_text(
         f'{{\n on_demand_tls {{\n ask http://127.0.0.1:8790/_tls-ask\n }}\n}}\nimport "{source}"\n'

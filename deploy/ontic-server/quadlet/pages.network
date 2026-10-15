@@ -1,0 +1,12 @@
+# The bridge the two pages containers share (pages-network.service).
+# oauth2-proxy and the gateway reach each other by alias on it. The subnet is
+# pinned and reserved in ontic-server hosts/<host>.toml; it is the one the
+# pages network has on ontic-vps. Changing it later needs
+# `podman network rm pages` first, so treat it as write-once.
+[Unit]
+Description=ontic-pages container network
+
+[Network]
+NetworkName=pages
+Subnet=172.31.241.0/24
+Gateway=172.31.241.1

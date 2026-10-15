@@ -91,6 +91,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   `uv run --with playwright --with nodejs-wheel pytest -q`; CHROMIUM_PATH selects the browser.
   `direct_bucket.py` models private grants, expiry, Range and CORS without production credentials.
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.
+- `deploy/ontic-server/`: the same service as an ontic-server app (app.toml, Quadlet units,
+  Caddyfile, secrets.keys, a post-start hook), not yet in use: the live box still runs the
+  files above. Commands need `--app-dir deploy/ontic-server`.
 
 ## Rules
 

@@ -1,0 +1,63 @@
+# The ontic-pages gateway. Installed as
+# /etc/containers/systemd/pages-gateway.container; daemon-reload generates
+# pages-gateway.service.
+#
+# It reads the bucket and writes each version's page.json, `current` and
+# `visibility`; page files go from the publisher's laptop straight to the
+# bucket with presigned PUT URLs it hands out. It asks oauth2-proxy who a
+# request's cookie belongs to, and checks command line tokens with
+# ONTIC_PAGES_TOKEN_SECRET.
+[Unit]
+Description=ontic-pages gateway
+StartLimitIntervalSec=0
+
+[Container]
+ContainerName=pages-gateway
+# Built on the box from the committed revision (deploy/Dockerfile). Each
+# deploy adds a drop-in that pins the release's image ID, so this tag is only
+# a fallback.
+Image=localhost/pages:latest
+Pull=never
+Network=pages.network
+NetworkAlias=gateway
+# Reserved in hosts/<host>.toml; the image's own user has the same uid.
+User=10003
+Group=10003
+
+# AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (a key scoped to the bucket
+# that can read and write but not delete), ONTIC_PAGES_TOKEN_SECRET, and the
+# optional ONTIC_PAGES_GITHUB_TOKEN, _REPO and _OWNER. Staged by
+# `server <host> pages secrets push`, mode 0600 root:root, read by podman
+# before the container starts.
+EnvironmentFile=/etc/pages/current/gateway.env
+Environment=TZ=Europe/Berlin
+# The apex. Page content is served from <name>.<apex host>.
+Environment=ONTIC_PAGES_URL=https://pages.62-83-41-41.sslip.io
+Environment=ONTIC_PAGES_BUCKET=ontic-pages
+Environment=ONTIC_PAGES_ENDPOINT=https://s3.eu-central-003.backblazeb2.com
+Environment=ONTIC_PAGES_REGION=eu-central-003
+# Direct delivery of eligible data and media from the bucket (needs the
+# bucket's download CORS rule, which hooks/post-start.sh checks). 0 serves
+# everything through the gateway.
+Environment=ONTIC_PAGES_DIRECT_FILES=1
+
+# One way in: Caddy on the host, at 127.0.0.1:8790, for the apex, every page
+# host, and its own on-demand certificate question (/_tls-ask). Keep this on
+# loopback: /_tls-ask answers any Host but the public ones, and Caddy is what
+# refuses it from outside.
+PublishPort=127.0.0.1:8790:8790
+Exec=gateway --host 0.0.0.0 --port 8790 --auth-url http://oauth2-proxy:4180/oauth2/auth
+
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+LogDriver=journald
+PodmanArgs=--memory=512m
+StopTimeout=10
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

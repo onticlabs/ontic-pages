@@ -1,0 +1,58 @@
+# Google sign-in for ontic-pages. Not in the request path: Caddy sends only
+# /oauth2/* on the apex here (sign-in, its callback, sign-out), and the
+# gateway asks it who a cookie belongs to at
+# http://oauth2-proxy:4180/oauth2/auth on the pages network. Caddy's
+# connections to the published port arrive from the network's gateway,
+# 172.31.241.1, the only address whose X-Forwarded-* headers it trusts (the
+# gateway's own subrequest sends only Cookie and Accept).
+[Unit]
+Description=ontic-pages Google sign-in (oauth2-proxy)
+StartLimitIntervalSec=0
+
+[Container]
+ContainerName=pages-oauth2-proxy
+# The version olympus and the older pages deploy pin.
+Image=quay.io/oauth2-proxy/oauth2-proxy:v7.15.4
+Network=pages.network
+NetworkAlias=oauth2-proxy
+# The image's own uid, shared by every app's oauth2-proxy. It reads secrets
+# only from the environment below, so no file is mounted.
+User=65532
+Group=65532
+# OAUTH2_PROXY_CLIENT_ID, _CLIENT_SECRET, _COOKIE_SECRET. Staged by
+# `server <host> pages secrets push`, mode 0600 root:root, read by podman as
+# root before the container exists.
+EnvironmentFile=/etc/pages/current/oauth2-proxy.env
+# 4180 is atlas's and 4181 olympus's oauth2-proxy on ontic-vps.
+PublishPort=127.0.0.1:4190:4180
+# The settings of the older deploy's oauth2-proxy.cfg, as flags:
+#   upstream static://404      nothing is proxied; only /oauth2/* is used
+#   set-xauthrequest           /oauth2/auth answers X-Auth-Request-Email,
+#                              which is how the gateway learns who is asking
+#   cookie-domain              the parent of every page host, so each page's
+#                              content host carries the session to the
+#                              gateway; never the whole company domain, since
+#                              pages run team JavaScript
+#   whitelist-domain           where /oauth2/start may send a browser back to
+Exec=--http-address=0.0.0.0:4180 --provider=google --email-domain=onticlabs.io \
+    --upstream=static://404 \
+    --redirect-url=https://pages.62-83-41-41.sslip.io/oauth2/callback \
+    --reverse-proxy=true --trusted-proxy-ip=172.31.241.1/32 --real-client-ip-header=X-Forwarded-For \
+    --cookie-domain=.pages.62-83-41-41.sslip.io \
+    --whitelist-domain=.pages.62-83-41-41.sslip.io --whitelist-domain=pages.62-83-41-41.sslip.io \
+    --cookie-expire=720h --cookie-refresh=55m --cookie-secure=true --cookie-samesite=lax \
+    --cookie-httponly=true --skip-provider-button=true \
+    --set-xauthrequest=true --pass-basic-auth=false
+ReadOnly=true
+DropCapability=all
+NoNewPrivileges=true
+LogDriver=journald
+PodmanArgs=--memory=256m
+StopTimeout=10
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

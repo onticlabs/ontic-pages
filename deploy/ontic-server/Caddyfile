@@ -1,0 +1,107 @@
+# ontic-pages' sites. Installed as /etc/caddy/conf.d/pages.caddy; the main
+# Caddyfile imports conf.d/*.caddy. Deploys validate the whole config,
+# restore this file if validation fails, and reload (never restart) Caddy.
+#
+#   <apex>/oauth2/*   -> pages-oauth2-proxy 127.0.0.1:4190  (Google sign-in)
+#   <apex>/*          -> pages-gateway 127.0.0.1:8790       (overview, bar, API)
+#   *.<apex>/*        -> pages-gateway 127.0.0.1:8790       (page content)
+#
+# ONE GLOBAL OPTION LIVES OUTSIDE THIS FILE. Page hosts get certificates on
+# demand, one per page on its first visit, after Caddy asked the gateway
+# whether that page exists. Caddy refuses `on_demand` without this in the
+# global options block at the top of the MAIN Caddyfile, which the host owns:
+#
+#     {
+#         on_demand_tls {
+#             ask http://127.0.0.1:8790/_tls-ask
+#         }
+#     }
+#
+# The gateway asks oauth2-proxy who a cookie belongs to (/oauth2/auth) and
+# never reads identity headers from a request. Caddy strips them anyway, so
+# that stays true for any upstream. X-Forwarded-Uri too: oauth2-proxy builds
+# its after-sign-in redirect from it, and Caddy would pass a client's on.
+(pages_strip_identity) {
+	header_up -X-Forwarded-Email
+	header_up -X-Forwarded-User
+	header_up -X-Forwarded-Groups
+	header_up -X-Forwarded-Preferred-Username
+	header_up -X-Forwarded-Access-Token
+	header_up -X-Auth-Request-Email
+	header_up -X-Auth-Request-User
+	header_up -X-Auth-Request-Groups
+	header_up -X-Auth-Request-Preferred-Username
+	header_up -X-Auth-Request-Access-Token
+	header_up -X-Forwarded-Uri
+}
+
+# Signed download URLs are bearer credentials; never log redirect targets.
+(pages_log) {
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				resp_headers>Location delete
+			}
+		}
+	}
+}
+
+pages.62-83-41-41.sslip.io {
+	encode zstd gzip
+
+	# The only writes are small JSON bodies to the API.
+	request_body {
+		max_size 64KB
+	}
+
+	# Only for Caddy itself, on 127.0.0.1: it says which page names exist.
+	handle /_tls-ask {
+		respond 404
+	}
+
+	handle /oauth2/* {
+		reverse_proxy 127.0.0.1:4190 {
+			import pages_strip_identity
+		}
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8790 {
+			flush_interval -1
+			import pages_strip_identity
+		}
+	}
+
+	import pages_log
+}
+
+# Every page, one certificate each, issued on its first visit once the
+# gateway said the page exists. Caddy keeps the browser's Host header, which
+# is how the gateway knows the page. Read-only: the gateway answers 405 to
+# any write here.
+*.pages.62-83-41-41.sslip.io {
+	tls {
+		on_demand
+	}
+
+	encode zstd gzip
+
+	request_body {
+		max_size 64KB
+	}
+
+	handle /_tls-ask {
+		respond 404
+	}
+
+	handle {
+		reverse_proxy 127.0.0.1:8790 {
+			flush_interval -1
+			import pages_strip_identity
+		}
+	}
+
+	import pages_log
+}
