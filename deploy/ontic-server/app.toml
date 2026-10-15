@@ -60,21 +60,24 @@ backup = false
 # this model (public pages are open to anyone).
 recipe = "app"
 # Probed through Caddy with no credentials, an invalid bearer token and
-# forged identity headers. /_api/me answers 401 to all three. "/" is not
-# listed: it redirects to /oauth2/start without credentials but answers 401
-# to an invalid bearer token, and one route may declare only one rejection;
-# hooks/post-start.sh checks its redirect instead.
+# forged identity headers. "/" redirects a browser without a session to this
+# app's /oauth2/start and answers 401 to an invalid bearer token, so it
+# accepts either; /_api/me and /_api/pages answer 401 to all three.
 protected = [
+  { path = "/", reject = ["sign-in", "401"] },
   { path = "/_api/me", reject = "401" },
   { path = "/_api/pages", reject = "401" },
 ]
-sign_in_redirects = []
+# Where a "sign-in" redirect may point: the apex's own /oauth2/start, which
+# Caddy sends to oauth2-proxy.
+sign_in_redirects = ["https://pages.62-83-41-41.sslip.io/oauth2/start"]
 
 [hooks]
 pre_stop = ""
 pre_stop_timeout_seconds = 600
-# Sign-in redirect of the apex, Caddy's on-demand certificate question, the
-# bucket (skipped with dummy credentials) and the bucket's download CORS.
+# /oauth2/start reaching Google through Caddy, and the bucket's download
+# CORS. (ontic-server itself asks the gateway's /_tls-ask about names that
+# are not pages, from hosts/<host>.toml caddy_on_demand_ask.)
 post_start = "hooks/post-start.sh"
 post_start_timeout_seconds = 60
 watchdog = ""
