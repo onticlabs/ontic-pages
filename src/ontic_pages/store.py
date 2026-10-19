@@ -23,7 +23,7 @@ import re
 
 import boto3
 from botocore.config import Config as BotoConfig
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, HTTPClientError
 
 from .config import Config
 
@@ -128,6 +128,9 @@ def check_tags(tags) -> list[str]:
     return tags
 
 
+READ_TRIES = 3  # reads of one small object broken off midway (Store.read_bytes)
+
+
 def make_client(cfg: Config):
     kwargs = {}
     if cfg.access_key_id and cfg.secret_access_key:
@@ -212,8 +215,27 @@ class Store:
             token = resp["NextContinuationToken"]
 
     def read_text(self, key: str) -> str | None:
-        obj = self.get(key)
-        return None if obj is None else obj["Body"].read().decode()
+        data = self.read_bytes(key)
+        return None if data is None else data.decode()
+
+    def read_bytes(self, key: str, obj: dict | None = None) -> bytes | None:
+        """A small object's bytes (from `obj`, its get() answer, when given), or None when it
+        does not exist. A read broken off midway (the bucket's connection dropped, botocore's
+        HTTPClientError) is asked for again, up to READ_TRIES times: botocore itself retries
+        only until the answer begins."""
+        for attempt in range(READ_TRIES):
+            obj = obj or self.get(key)
+            if obj is None:
+                return None
+            try:
+                return obj["Body"].read()
+            except HTTPClientError:
+                if attempt == READ_TRIES - 1:
+                    raise
+            finally:
+                obj["Body"].close()
+            obj = None
+        return None  # not reached
 
     def exists(self, key: str) -> bool:
         try:

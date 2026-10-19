@@ -3,11 +3,12 @@ the caches that keep it cheap (gateway.Gateway.openable, cache.NameCache, LabelC
 overview as it comes: a loading screen, then each report once read (?stream=1)."""
 
 import http.client
+import io
 import json
 import threading
 from datetime import UTC, datetime
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ResponseStreamingError
 from helpers import request
 from test_research import OTHER, OWNER, call, host
 
@@ -198,3 +199,48 @@ def test_overview_html_shows_loading_until_the_script_draws(local, store, site):
     loading = text.index('class="page loading"')
     assert loading < text.index("<noscript>")
     assert "Loading reports" in text and 'role="status"' in text
+
+
+# --- bucket reads broken off midway (the 502 of 2026-10-20) -------------------------------------
+
+
+class Broken(io.BytesIO):
+    """A body whose connection drops before its bytes arrive."""
+
+    def read(self, *args):
+        raise ResponseStreamingError(error="IncompleteRead(0 bytes read, 1101 more expected)")
+
+
+def breaking(store, monkeypatch, suffix, times):
+    """get_object answers for keys ending in `suffix` break `times` times; returns the count."""
+    real, broken = store.client.get_object, []
+
+    def get_object(**kwargs):
+        obj = real(**kwargs)
+        if kwargs["Key"].endswith(suffix) and len(broken) < times:
+            broken.append(kwargs["Key"])
+            obj["Body"] = Broken()
+        return obj
+
+    monkeypatch.setattr(store.client, "get_object", get_object)
+    return broken
+
+
+def test_a_read_broken_off_is_asked_again(local, store, site, monkeypatch):
+    publish(store, site, "report", published_by=OWNER, now=T1)
+    srv = local()
+    broken = breaking(store, monkeypatch, "/current", 2)  # READ_TRIES is 3
+    assert [r["name"] for r in call(srv, "/_api/overview", who=OWNER)[1]["reports"]] == ["report"]
+    assert len(broken) == 2
+    breaking(store, monkeypatch, "/page.json", 1)  # page.json goes through the file cache
+    srv = local()
+    assert [r["name"] for r in call(srv, "/_api/overview", who=OWNER)[1]["reports"]] == ["report"]
+
+
+def test_a_read_that_keeps_breaking_answers_502(local, store, site, monkeypatch):
+    publish(store, site, "report", published_by=OWNER, now=T1)
+    srv = local()
+    breaking(store, monkeypatch, "/current", 99)
+    assert call(srv, "/_api/overview", who=OWNER)[0] == 502  # an answer, not a dropped connection
+    _, lines = stream(srv)
+    assert list(lines)[-1] == {"error": "store error"}

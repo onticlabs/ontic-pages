@@ -75,7 +75,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from .auth import (
     DEFAULT_AUTH_URL,
@@ -731,7 +731,7 @@ def make_handler(gw: Gateway):
                 return self.send_text(503, "sign-in is not answering, try again\n")
             except BadToken:
                 return self.send_json(401, {"error": EXPIRED})
-            except ClientError as err:
+            except (ClientError, BotoCoreError) as err:
                 self.log_error("store error: %s", err)
                 return self.send_text(502, "store error\n")
 
@@ -1117,7 +1117,7 @@ def make_handler(gw: Gateway):
                 self.send_json(401, {"error": EXPIRED})
             except Refused as err:
                 self.send_json(err.status, {"error": err.message})
-            except ClientError as err:
+            except (ClientError, BotoCoreError) as err:
                 self.log_error("store error: %s", err)
                 self.send_json(502, {"error": "store error"})
 
