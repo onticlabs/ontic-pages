@@ -1,0 +1,13 @@
+{
+  "name": "ontic-pages",
+  "owner": {
+    "name": "Ontic Labs"
+  },
+  "description": "Claude Code plugin for ontic-pages, the team page publisher",
+  "plugins": [
+    {
+      "name": "ontic-pages",
+      "source": "./claude-plugin"
+    }
+  ]
+}

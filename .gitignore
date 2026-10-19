@@ -8,3 +8,4 @@ secrets.env
 *.egg-info/
 dist/
 migration-mapping.json
+claude-plugin/.claude-plugin/types/

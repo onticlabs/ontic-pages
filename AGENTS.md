@@ -75,6 +75,10 @@ See README.md for what it does and deploy/README.md for how it is hosted.
 - `src/ontic_pages/skills.py` and `src/ontic_pages/skills/ontic-pages/SKILL.md`: the agent skill
   (package data), synced into Claude Code and Codex on every command but `gateway` and `skill`.
   Edit the skill text there, never in an installed copy.
+- `claude-plugin/` (a Claude Code hooks module: the last published page as a link above the
+  prompt, and `/page`) and `.claude-plugin/marketplace.json` (this repository as its
+  marketplace). `src/ontic_pages/plugin.py` installs or updates it in the background wherever the
+  skill is synced. Bump `plugin.json`'s version and `plugin.VERSION` together on every change.
 - The overview at `/` (`shell.overview_html`, `static/overview.js` and `overview.css`): a
   Notion-like database with two tables (reports, milestones), saved views per table, and the composer (Markdown with dropped media,
   uploaded by the browser to presigned URLs; the gateway renders at commit, uploads.py). Text goes

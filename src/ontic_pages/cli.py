@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import comments_cli, gateway, milestones_cli, pull, remote, skills
+from . import comments_cli, gateway, milestones_cli, plugin, pull, remote, skills
 from .auth import DEFAULT_AUTH_URL
 from .cache import MB
 from .config import Config, command_name, load_config, token_path
@@ -353,6 +353,7 @@ def cmd_whoami(args) -> None:
 def cmd_skill(args) -> None:
     if args.sync:  # quiet: the ontic CLI's daily background refresh
         skills.sync_skill()
+        plugin.sync_plugin()
         return
     if args.print:
         sys.stdout.write(skills.bundled())
@@ -608,6 +609,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command not in ("gateway", "skill"):
         # Reinstalling the tool runs no code, so the agent skill is refreshed on every run.
         skills.sync_skill()
+        plugin.sync_plugin()
     try:
         args.func(args)
     except ValueError as err:

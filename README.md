@@ -248,6 +248,30 @@ The ontic CLI runs this tool as `ontic pages ...` (from GitHub `main` through uv
 
 The text lives in `src/ontic_pages/skills/ontic-pages/SKILL.md`.
 
+## Claude Code plugin
+
+A small Claude Code plugin shows the last page you published in a session as a clickable link
+above the prompt (`Ontic page: depth-eval (version 3)`), and `/page` prints that link again. It
+reads the `published ... version ...` line and the URL that `publish` prints, so it works for
+`ontic pages publish` and `ontic-pages publish` alike.
+
+You do not install it by hand. Wherever the skill is synced (every command but `gateway` and
+`skill`, and `skill --sync`, the ontic CLI's daily refresh), `ontic-pages` checks Claude Code's
+record of installed plugins and, when the plugin is missing or older than this install, runs
+`claude plugin install` (or `claude plugin update`) in the background, at most once a day; the
+output goes to `~/.config/ontic-pages/plugin-sync.log`. It needs `claude` on PATH and an existing
+`~/.claude` (or `CLAUDE_CONFIG_DIR`), and shows in sessions started after the install.
+`ONTIC_AGENT_SKILLS=0` turns it off. To install it yourself, in Claude Code:
+
+```
+/plugin install ontic-pages --marketplace onticlabs/ontic-pages
+```
+
+The plugin lives in `claude-plugin/` (a hooks module, `claude plugin test claude-plugin` runs its
+tests); `.claude-plugin/marketplace.json` makes this repository its marketplace. Whoever changes
+it bumps the version in `claude-plugin/.claude-plugin/plugin.json` and `plugin.VERSION` together
+(`tests/test_plugin.py` checks they match), so installed copies are updated.
+
 ## Configure
 
 Set environment variables, or put the same values in `~/.config/ontic-pages/config.toml`

@@ -1,0 +1,9 @@
+{
+  "name": "ontic-pages",
+  "version": "0.1.0",
+  "description": "Shows the last ontic page published in this session as a link above the prompt, and /page to print it again",
+  "author": {
+    "name": "Ontic Labs"
+  },
+  "types": "./types/index.d.ts"
+}
