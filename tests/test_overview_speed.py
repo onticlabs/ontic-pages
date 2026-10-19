@@ -8,7 +8,7 @@ import json
 import threading
 from datetime import UTC, datetime
 
-from botocore.exceptions import ClientError, ResponseStreamingError
+from botocore.exceptions import ClientError, IncompleteReadError, ResponseStreamingError
 from helpers import request
 from test_research import OTHER, OWNER, call, host
 
@@ -205,13 +205,20 @@ def test_overview_html_shows_loading_until_the_script_draws(local, store, site):
 
 
 class Broken(io.BytesIO):
-    """A body whose connection drops before its bytes arrive."""
+    """A body whose connection drops before its bytes arrive (urllib3 sees it, or botocore
+    counts fewer bytes than announced)."""
+
+    def __init__(self, short=False):
+        super().__init__()
+        self.short = short
 
     def read(self, *args):
+        if self.short:
+            raise IncompleteReadError(actual_bytes=0, expected_bytes=1101)
         raise ResponseStreamingError(error="IncompleteRead(0 bytes read, 1101 more expected)")
 
 
-def breaking(store, monkeypatch, suffix, times):
+def breaking(store, monkeypatch, suffix, times, short=False):
     """get_object answers for keys ending in `suffix` break `times` times; returns the count."""
     real, broken = store.client.get_object, []
 
@@ -219,7 +226,7 @@ def breaking(store, monkeypatch, suffix, times):
         obj = real(**kwargs)
         if kwargs["Key"].endswith(suffix) and len(broken) < times:
             broken.append(kwargs["Key"])
-            obj["Body"] = Broken()
+            obj["Body"] = Broken(short)
         return obj
 
     monkeypatch.setattr(store.client, "get_object", get_object)
@@ -232,7 +239,7 @@ def test_a_read_broken_off_is_asked_again(local, store, site, monkeypatch):
     broken = breaking(store, monkeypatch, "/current", 2)  # READ_TRIES is 3
     assert [r["name"] for r in call(srv, "/_api/overview", who=OWNER)[1]["reports"]] == ["report"]
     assert len(broken) == 2
-    breaking(store, monkeypatch, "/page.json", 1)  # page.json goes through the file cache
+    breaking(store, monkeypatch, "/page.json", 1, short=True)  # through the file cache
     srv = local()
     assert [r["name"] for r in call(srv, "/_api/overview", who=OWNER)[1]["reports"]] == ["report"]
 

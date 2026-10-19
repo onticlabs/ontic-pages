@@ -1473,6 +1473,11 @@ def make_handler(gw: Gateway):
             try:
                 while self.command != "HEAD" and (chunk := body.read(CHUNK)):
                     self.wfile.write(chunk)
+            except BotoCoreError as err:
+                # The headers are out: a second answer would land in the file's bytes. Close
+                # the connection instead, so the browser sees the file cut short.
+                self.log_error("store error while sending: %s", err)
+                self.close_connection = True
             finally:
                 body.close()
 

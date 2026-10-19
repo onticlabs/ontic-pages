@@ -23,7 +23,7 @@ import re
 
 import boto3
 from botocore.config import Config as BotoConfig
-from botocore.exceptions import ClientError, HTTPClientError
+from botocore.exceptions import ClientError, HTTPClientError, IncompleteReadError
 
 from .config import Config
 
@@ -220,16 +220,16 @@ class Store:
 
     def read_bytes(self, key: str, obj: dict | None = None) -> bytes | None:
         """A small object's bytes (from `obj`, its get() answer, when given), or None when it
-        does not exist. A read broken off midway (the bucket's connection dropped, botocore's
-        HTTPClientError) is asked for again, up to READ_TRIES times: botocore itself retries
-        only until the answer begins."""
+        does not exist. A read broken off midway (the bucket's connection dropped: botocore's
+        HTTPClientError, or IncompleteReadError, fewer bytes than announced) is asked for again,
+        up to READ_TRIES times: botocore itself retries only until the answer begins."""
         for attempt in range(READ_TRIES):
             obj = obj or self.get(key)
             if obj is None:
                 return None
             try:
                 return obj["Body"].read()
-            except HTTPClientError:
+            except (HTTPClientError, IncompleteReadError):
                 if attempt == READ_TRIES - 1:
                     raise
             finally:
