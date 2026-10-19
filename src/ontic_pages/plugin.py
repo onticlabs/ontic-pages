@@ -15,12 +15,12 @@ and version is tried at most once a day: the attempts are kept in `plugin-sync.j
 ontic-pages config folder, checked and recorded under a lock so two commands at once start one
 worker; the steps' output goes to `plugin-sync.log` beside it. The plugin takes effect in Claude
 Code sessions started after the install. When current it costs a stat and a small read; it
-prints nothing and never raises. `ONTIC_AGENT_SKILLS=0` turns it off, as for the skill.
+prints nothing and never raises. `ONTIC_AGENT_SKILLS=0` turns it off, as for the skill; on
+systems without `fcntl` (native Windows) it is off.
 """
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import shutil
@@ -31,6 +31,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from . import config, skills
+
+try:
+    import fcntl  # the lock and the worker's fork are Unix only; elsewhere the sync is off
+except ImportError:
+    fcntl = None
 
 NAME = "ontic-pages"
 MARKETPLACE = "ontic-pages"
@@ -150,7 +155,7 @@ def sync_plugin(
     """Install or update the plugin in the background when it is missing or old. Never
     raises."""
     env = os.environ if env is None else env
-    if skills.turned_off(env):
+    if fcntl is None or skills.turned_off(env):
         return
     try:
         root = claude_root(env)

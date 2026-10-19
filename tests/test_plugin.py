@@ -145,6 +145,11 @@ def test_skips_without_claude_or_its_folder(home, monkeypatch, tmp_path):
     assert sync() == []
 
 
+def test_off_without_fcntl(home, monkeypatch):
+    monkeypatch.setattr(plugin, "fcntl", None)
+    assert sync() == []
+
+
 def test_turned_off(home, monkeypatch):
     monkeypatch.setenv("ONTIC_AGENT_SKILLS", "0")
     assert sync() == []
