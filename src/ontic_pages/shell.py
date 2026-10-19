@@ -326,9 +326,20 @@ def overview_html(email: str, assets: Assets, fallback: str) -> str:
 <script src="{assets.url("overview.js")}" defer></script>
 </head>
 <body data-viewer="{e(email)}">
-<div id="app"><noscript>{fallback}</noscript></div>
+<div id="app">{LOADING}<noscript>{fallback}</noscript></div>
 </body></html>
 """
+
+
+# What / shows before its script draws the overview (hidden without script: overview.css).
+# overview.js draws the same skeleton while the reports are still on their way.
+LOADING = (
+    '<div class="page loading" aria-busy="true"><header class="head"><h1><span class="mark" '
+    'aria-hidden="true"></span>Ontic research</h1></header>'
+    '<p class="loadnote" role="status"><span class="spin" aria-hidden="true"></span>'
+    "Loading reports</p>"
+    '<div class="skeleton" aria-hidden="true">' + "<i></i>" * 8 + "</div></div>"
+)
 
 
 def login_html(email: str, code: str, problem: str, assets: Assets) -> str:

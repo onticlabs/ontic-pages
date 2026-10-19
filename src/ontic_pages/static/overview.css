@@ -84,6 +84,27 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
         background: conic-gradient(from 200deg, var(--p-data), var(--p-scene-reconstruction),
           var(--p-world-models), var(--p-robot-learning), var(--p-data)); }
 .head .avatar { width: 28px; height: 28px; font-size: 12px; }
+
+/* loading: the skeleton / shows before its script runs and while no report has come yet, and
+   the note beside the title while reports are still coming (overview.js) */
+.loadnote { display: inline-flex; align-items: center; gap: 8px; margin: 0; color: var(--muted);
+            font-size: 13px; }
+.loading .loadnote { margin: 4px 0 6px; }
+.loadnote.bad { color: var(--danger); }
+.loadnote button { border: 0; background: none; color: var(--accent); font-weight: 550; cursor: pointer;
+                   padding: 0; }
+.spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line);
+        border-top-color: var(--muted); animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.skeleton { display: grid; gap: 14px; padding: 18px 2px; }
+.skeleton i { display: block; height: 14px; border-radius: 6px;
+              background: linear-gradient(90deg, var(--hover) 25%, var(--line) 50%, var(--hover) 75%);
+              background-size: 400% 100%; animation: shimmer 1.6s ease-in-out infinite; }
+.skeleton i:nth-child(3n + 2) { width: 78%; }
+.skeleton i:nth-child(3n) { width: 62%; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .spin, .skeleton i { animation: none; } }
+@media (scripting: none) { .loading { display: none; } }
 .dbs { display: flex; gap: 4px; margin-bottom: 18px; }
 .db { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border: 0;
       border-radius: 7px; background: none; color: var(--muted); cursor: pointer; font-weight: 500; }
