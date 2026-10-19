@@ -6,15 +6,15 @@ import type { Page } from '../types'
 const last = atom({ plugin: 'ontic-pages', key: 'last' } as const, null)
 
 // `ontic pages publish` (or `ontic-pages publish`) prints
-// "published <name> version <n> (<k> files)" and, last, the page URL ending in /<name>/.
+// "published <name> version <version id> (<k> files)" and, last, the page URL ending in /<name>/.
 const PUBLISH_COMMAND = /\bontic[- ]pages\b[\s\S]*\bpublish\b/
 
 export function parsePublish(stdout: string): Page | null {
   let page: Page | null = null
   for (const line of stdout.split('\n').map(text => text.trim())) {
-    const [, name, version] = /^published (\S+) version (\d+) \(/.exec(line) ?? []
+    const [, name, version] = /^published (\S+) version (\S+) \(/.exec(line) ?? []
     if (name && version) {
-      page = { name, version: Number(version), url: '' }
+      page = { name, version, url: '' }
     } else if (page && !page.url && /^https?:\/\/\S+$/.test(line) && line.endsWith(`/${page.name}/`)) {
       page.url = line
     }
@@ -55,17 +55,21 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const below = await next(e)
     const page = await read($, last)
     if (e.props.hasSurvey || page === null) {
-      return next(e)
+      return below
     }
 
     const { Box, Link, Text } = $.ui.resolve(e)
 
     return (
-      <Box>
-        <Text dimColor>Ontic page: </Text>
-        <Link href={page.url} label={`${page.name} (version ${page.version})`} />
+      <Box flexDirection="column">
+        <Box>
+          <Text dimColor>Ontic page: </Text>
+          <Link href={page.url} label={page.name} />
+        </Box>
+        {below}
       </Box>
     )
   })

@@ -3,8 +3,10 @@ import { expect, test } from 'claude-code/testing'
 
 import { parsePublish } from './register'
 
+// What `ontic pages publish` prints for a private page (cli.py, cmd_publish).
 const OUTPUT = [
-  'published depth-eval version 3 (12 files)',
+  'uploading 12/12 files, 3.4/3.4 MB',
+  'published depth-eval version 20261019T091314Z (12 files)',
   'private: only mikel@onticlabs.io can open it, signed in with that address',
   'https://pages.onticlabs.io/depth-eval/',
   '',
@@ -19,24 +21,24 @@ const PROPS = {
   view: {},
 }
 
-// The engine beneath the plugin: a Bash call that printed OUTPUT, and an empty band.
+// The engine beneath the plugin: a Bash call that printed OUTPUT, and a band another plugin drew.
 function engine(on: On) {
   on('tool.call', { tool: 'Bash' }, () => ({
     result: { stdout: OUTPUT, stderr: '', interrupted: false, isImage: false },
   }))
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box />
+    const { Text } = $.ui.resolve(e)
+    return <Text>Other plugin status</Text>
   })
 }
 
 test('reads the page from the publish output', () => {
   expect(parsePublish(OUTPUT)).toEqual({
     name: 'depth-eval',
-    version: 3,
+    version: '20261019T091314Z',
     url: 'https://pages.onticlabs.io/depth-eval/',
   })
-  expect(parsePublish('published depth-eval version 3 (12 files)\n')).toBe(null)
+  expect(parsePublish('published depth-eval version 20261019T091314Z (12 files)\n')).toBe(null)
   expect(parsePublish('hello\n')).toBe(null)
 })
 
@@ -49,7 +51,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.tool.call({ tool: 'Bash', command: 'ontic pages publish ./report --name depth-eval' })
 
     const after = await $.ui.mount({ plugin: 'ontic-pages', surface, component: 'AbovePrompt', props: PROPS })
-    expect(await after.find({ type: 'Link' })).toMatchObject({ text: 'depth-eval (version 3)' })
+    expect(await after.find({ type: 'Link' })).toMatchObject({ text: 'depth-eval' })
+    expect(await after.find({ text: 'Other plugin status' })).toBeDefined()
   })
 }
 
