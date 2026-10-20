@@ -83,6 +83,9 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   Notion-like database with two tables (reports, milestones), saved views per table, and the composer (Markdown with dropped media,
   uploaded by the browser to presigned URLs; the gateway renders at commit, uploads.py). Text goes
   in with textContent; the preview is the rendered page in a frame without scripts.
+  It loads as JSON lines (`/_api/overview?stream=1`, `Gateway.overview_lines`): a loading
+  screen in the HTML, then the first load draws each report once its state is read; a refresh
+  swaps the rows only when its answer ends with `{"done": true}`.
 - `src/ontic_pages/cli.py`: argparse commands.
 - `scripts/migrate_old_pages.py`: one-off copy of the old `ontic pages` jobs into this layout.
 - `tests/`: pytest, against `tests/fake_s3.py` (an in-memory fake of the few boto3 calls used;
@@ -91,7 +94,8 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   `test_edit_js.py` the served edit mode, `test_details_js.py` the Details panel,
   `test_share_js.py` the Share panel's people, each with a small fake DOM (all skipped without
   node).
-- `tests/test_direct_files_browser.py`: optional Chromium/Playwright regression suite, run with
+- `tests/test_direct_files_browser.py` and `tests/test_overview_browser.py` (the overview while
+  its reports come): optional Chromium/Playwright regression suites, run with
   `uv run --with playwright --with nodejs-wheel pytest -q`; CHROMIUM_PATH selects the browser.
   `direct_bucket.py` models private grants, expiry, Range and CORS without production credentials.
 - `deploy/`: container image, Quadlet units, Caddy and oauth2-proxy config, deploy scripts.

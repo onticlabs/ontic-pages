@@ -61,10 +61,9 @@ class FileCache:
         size, body = obj["ContentLength"], obj["Body"]
         data = None
         if size <= self.max_file:
-            try:
-                data = body.read()
-            finally:
-                body.close()
+            data = self.store.read_bytes(self.store.key(name, version, path), obj)
+            if data is None:
+                return None
             body = None
         entry = File(etag(version, (obj.get("ETag") or "").strip('"'), data), size, data)
         self._keep(key, entry, replace=False)

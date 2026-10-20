@@ -32,6 +32,7 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /_api/pages/<name>/source      a Markdown update's source, for Edit in the overview
     GET  /                              the research overview (static/overview.js), signed in
     GET  /_api/overview                 what it draws: reports, milestones, saved views
+                                        (?stream=1: as JSON lines, each report once read)
     GET  /_api/milestones               every milestone (milestones.py), team only
     POST /_api/milestones               a new one; .../<id> changes it (anyone on the team)
     POST /_api/views                    a saved view; .../<id> changes it, .../<id>/delete
@@ -69,12 +70,12 @@ import html
 import json
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from .auth import (
     DEFAULT_AUTH_URL,
@@ -134,7 +135,7 @@ from .uploads import Refused, Uploads
 
 CHUNK = 256 * 1024
 YEAR = "max-age=31536000, immutable"
-READERS = 8  # bucket reads at a time for the overview's page states (Gateway.openable)
+READERS = 16  # bucket reads at a time for the overview's page states (Gateway.openable)
 NAMES_TTL_FACTOR = 6  # the list of pages is kept this many times longer than a page's state
 PLAIN_LINK = (
     '<div class="plain"><h1>Ontic pages</h1><p>The overview needs JavaScript. '
@@ -269,12 +270,29 @@ class Gateway:
         rows = self.openable(email)
         reports = [report(*row) for row, gone in rows if not gone]
         reports.sort(key=lambda r: r["published_at"], reverse=True)
+        return {
+            **self.overview_head(email),
+            "reports": reports,
+            "deleted": [report(*row) for row, gone in rows if gone],
+        }
+
+    def overview_lines(self, email: str):
+        """The overview as it comes (?stream=1): first everything but the reports, then each
+        report as soon as its state is read (the viewer's deleted ones as "deleted"), in no
+        order (the overview sorts), last {"done": true}. No count of pages up front: it would
+        include those this viewer may not open."""
+        yield self.overview_head(email)
+        for row, gone in self.openable_as_read(email):
+            yield {"deleted" if gone else "reports": [report(*row)]}
+        yield {"done": True}
+
+    def overview_head(self, email: str) -> dict:
+        """The overview's data but the reports: milestones, views, pillars, who is asking."""
         team = self.team(email)
         return {
             "viewer": email,
             "team": team,
             "pillars": [{"id": p, "label": PILLAR_LABELS[p]} for p in PILLARS],
-            "reports": reports,
             "milestones": self.live_milestones() if team else [],
             "milestones_deleted": [m for m in self.milestones.items() if m.get("deleted")]
             if team
@@ -290,7 +308,8 @@ class Gateway:
             if team and self.sync
             else [],
             "views": self.views.items() if team else [],
-            "deleted": [report(*row) for row, gone in rows if gone],
+            "reports": [],
+            "deleted": [],
             "content_origin": self.site.content_origin("__name__"),
         }
 
@@ -321,6 +340,24 @@ class Gateway:
         """(row as in visible, deleted) of each page this viewer may open, deleted ones only
         when theirs. One listing; each page's state read on the readers, a few at a time (a
         page whose state expired costs a few bucket reads, so one after another is slow)."""
+        state = self.page_state(email)
+        return [found for found in self.readers.map(state, self.names.get()) if found]
+
+    def openable_as_read(self, email: str):
+        """As openable, each page as soon as its state is read. Closed early (the browser went
+        away), the reads not yet started are dropped."""
+        state = self.page_state(email)
+        futures = [self.readers.submit(state, name) for name in self.names.get()]
+        try:
+            for future in as_completed(futures):
+                if found := future.result():
+                    yield found
+        finally:
+            for future in futures:
+                future.cancel()
+
+    def page_state(self, email: str):
+        """name -> (row as in visible, deleted), or None when this viewer may not open it."""
         domain = self.site.email_domain
 
         def state(name: str):
@@ -333,7 +370,7 @@ class Gateway:
             row = (name, version, visibility, owner, self.meta(name, version), people)
             return row, gone
 
-        return [found for found in self.readers.map(state, self.names.get()) if found]
+        return state
 
     def facts(self, name: str, email: str) -> dict:
         """What the bar shows. Emails only for a signed-in viewer."""
@@ -610,6 +647,39 @@ def make_handler(gw: Gateway):
                 "X-Content-Type-Options": "nosniff",
             })  # fmt: skip
 
+        def send_lines(self, lines):
+            """JSON lines, each written as soon as it is ready, for as long as it takes (chunked,
+            one chunk a line). A failure once the answer has begun is its last line,
+            {"error": ...} (a second answer cannot follow), so a reader trusts only a final
+            {"done": true}."""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+
+            def chunk(data: bytes) -> None:
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
+                self.wfile.flush()
+
+            try:
+                if self.command == "HEAD":
+                    return
+                try:
+                    for line in lines:
+                        chunk(json.dumps(line).encode() + b"\n")
+                except OSError:
+                    raise
+                except Exception as err:  # noqa: BLE001 (the headers are out: only a line can say it)
+                    self.log_error("overview stream failed: %r", err)
+                    chunk(json.dumps({"error": "store error"}).encode() + b"\n")
+                self.wfile.write(b"0\r\n\r\n")
+            except OSError:
+                self.close_connection = True  # the browser went away (a newer load, a closed tab)
+            finally:
+                lines.close()
+
         def redirect(self, location: str, code: int = 301):
             self.send_body(code, b"", {"Location": location})
 
@@ -661,7 +731,7 @@ def make_handler(gw: Gateway):
                 return self.send_text(503, "sign-in is not answering, try again\n")
             except BadToken:
                 return self.send_json(401, {"error": EXPIRED})
-            except ClientError as err:
+            except (ClientError, BotoCoreError) as err:
                 self.log_error("store error: %s", err)
                 return self.send_text(502, "store error\n")
 
@@ -853,6 +923,8 @@ def make_handler(gw: Gateway):
             if not email:
                 return self.send_json(401, {"error": EXPIRED})
             if path == "/_api/overview":
+                if parse_qs(urlsplit(self.path).query).get("stream") == ["1"]:
+                    return self.send_lines(gw.overview_lines(email))
                 return self.send_json(200, gw.overview(email))
             if not gw.team(email):
                 return self.send_json(403, {"error": f"only @{site.email_domain} accounts"})
@@ -1045,7 +1117,7 @@ def make_handler(gw: Gateway):
                 self.send_json(401, {"error": EXPIRED})
             except Refused as err:
                 self.send_json(err.status, {"error": err.message})
-            except ClientError as err:
+            except (ClientError, BotoCoreError) as err:
                 self.log_error("store error: %s", err)
                 self.send_json(502, {"error": "store error"})
 
@@ -1401,6 +1473,11 @@ def make_handler(gw: Gateway):
             try:
                 while self.command != "HEAD" and (chunk := body.read(CHUNK)):
                     self.wfile.write(chunk)
+            except BotoCoreError as err:
+                # The headers are out: a second answer would land in the file's bytes. Close
+                # the connection instead, so the browser sees the file cut short.
+                self.log_error("store error while sending: %s", err)
+                self.close_connection = True
             finally:
                 body.close()
 

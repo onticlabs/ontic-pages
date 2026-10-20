@@ -1,5 +1,8 @@
+import io
+import socket
 from datetime import UTC, datetime
 
+from botocore.exceptions import ResponseStreamingError
 from helpers import APEX, content, request
 
 from ontic_pages.cache import FileCache, PageCache
@@ -104,6 +107,39 @@ def test_listing(serve, store, site):
         302,
         f"https://{APEX}/oauth2/start?rd=https%3A%2F%2F{APEX}%2F",
     )
+
+
+def test_a_file_cut_off_midway_closes_the_connection(serve, store, site, monkeypatch):
+    """Once the headers are out, a broken bucket read must not add a second answer to the file's
+    bytes: the connection closes and the browser sees the file cut short."""
+    server = serve()
+    publish(store, site, "report", now=T1)
+    real = store.client.get_object
+
+    class Cut(io.BytesIO):
+        def read(self, *args):
+            if self.tell():
+                raise ResponseStreamingError(error="IncompleteRead")
+            return super().read(2)
+
+    def get_object(**kwargs):
+        obj = real(**kwargs)
+        if kwargs["Key"].endswith("dot.png"):
+            obj["Body"] = Cut(obj["Body"].read())
+        return obj
+
+    monkeypatch.setattr(store.client, "get_object", get_object)
+    with socket.create_connection(("127.0.0.1", server.server_port), timeout=5) as sock:
+        sock.sendall(
+            f"GET /img/dot.png HTTP/1.1\r\nHost: report.{APEX}\r\nCookie: who=x@onticlabs.io\r\n"
+            "Range: bytes=8-11\r\n\r\n".encode()
+        )
+        got = b""
+        while chunk := sock.recv(65536):  # ends only because the gateway closes
+            got += chunk
+    head, _, body = got.partition(b"\r\n\r\n")
+    assert head.startswith(b"HTTP/1.1 206") and b"Content-Length: 4" in head
+    assert body == b"01"  # cut short, nothing after it
 
 
 def test_range_and_head(serve, store, site):

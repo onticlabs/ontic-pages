@@ -4,8 +4,9 @@
 // Markdown update (images and videos dropped in go straight to the bucket through presigned
 // URLs; the gateway renders the page, uploads.py) or adds a milestone.
 //
-// Everything comes from /_api/overview. Text people wrote is set with textContent, never as
-// HTML; the composer's preview is the rendered page in a sandboxed frame without scripts.
+// Everything comes from /_api/overview, as JSON lines (each report shows as it comes). Text people
+// wrote is set with textContent, never as HTML; the composer's preview is the rendered page in a
+// sandboxed frame without scripts.
 (function () {
   "use strict";
 
@@ -154,9 +155,41 @@
     }
     return fetch(path, options).then(function (resp) {
       return resp.json().catch(function () { return {}; }).then(function (json) {
-        if (!resp.ok) throw new Error(json.error || ("HTTP " + resp.status));
+        if (!resp.ok) throw failure(json.error, resp.status);
         return json;
       });
+    });
+  }
+  function failure(message, status) {
+    var err = new Error(message || ("HTTP " + status));
+    err.status = status;
+    return err;
+  }
+
+  // GET JSON lines, each(line) as each one arrives (a line may come in pieces, or several in one).
+  function lines(path, signal, each) {
+    var options = { credentials: "same-origin", headers: { "Accept": "application/x-ndjson" } };
+    if (signal) options.signal = signal;
+    return fetch(path, options).then(function (resp) {
+      function one(text) { if (text.trim()) each(JSON.parse(text)); }
+      if (!resp.ok) {
+        return resp.json().catch(function () { return {}; }).then(function (json) { throw failure(json.error, resp.status); });
+      }
+      if (!resp.body || !resp.body.getReader || !window.TextDecoder) {
+        return resp.text().then(function (text) { text.split("\n").forEach(one); });
+      }
+      var reader = resp.body.getReader(), decoder = new TextDecoder(), rest = "";
+      function pump() {
+        return reader.read().then(function (got) {
+          rest += decoder.decode(got.value || new Uint8Array(0), { stream: !got.done });
+          var parts = rest.split("\n");
+          rest = parts.pop();
+          parts.forEach(one);
+          if (got.done) return one(rest);
+          return pump();
+        });
+      }
+      return pump();
     });
   }
 
@@ -326,43 +359,143 @@
 
   // ---- loading and drawing -------------------------------------------------------------------
 
-  // When the data was last asked for, and the answer still on its way (a focus refresh skips
-  // both: no second request while one runs, none within FRESH_MS of the last).
-  var loadedAt = 0, loading = null;
-  var FRESH_MS = 30000;
+  // The overview comes as JSON lines: first everything but the reports, then each report once
+  // the gateway has read its state, last {"done": true} (anything else is cut off). The first
+  // load draws the rows as they come (`coming`); a refresh keeps the rows on screen until its
+  // answer is complete, then swaps them in, so a page no longer open to you never lingers. A
+  // newer load cancels an older one; only the newest (seq) changes anything.
+  // loadedAt: when a load last completed (a focus refresh skips while one runs, and within
+  // FRESH_MS of the last). failed: why the rows on screen are incomplete, with Retry. edits:
+  // inline saves so far; a refresh that overlapped one may hold rows from before it, so it loads
+  // again instead of swapping them in.
+  var loadedAt = 0, loading = null, seq = 0, cancel = null, coming = false, failed = "", edits = 0;
+  var FRESH_MS = 30000, DRAW_MS = 150;
 
   function load() {
-    loadedAt = Date.now();
-    loading = api("GET", "/_api/overview").then(function (answer) {
-      data = answer;
-      if (!state.loaded) {
-        state.loaded = true;
-        ["reports", "milestones"].forEach(function (db) {
-          var saved = store("view:" + db);
-          if (saved && views(db).some(function (v) { return v.id === saved; })) state.view[db] = saved;
-        });
-        if (store("db") === "milestones" && data.team) state.db = "milestones";
+    if (cancel) cancel.abort();
+    var ctl = window.AbortController ? new AbortController() : null;
+    var id = ++seq, next = null, done = false, since = edits;
+    cancel = ctl;
+    if (!data) loadingScreen();
+    function newest() { return id === seq; }
+    loading = lines("/_api/overview?stream=1", ctl && ctl.signal, function (line) {
+      if (!newest()) return;
+      if (line.error) throw new Error(line.error);
+      if (line.done) { done = true; return; }
+      if (next) {  // a report (or a deleted one of yours)
+        next.reports = next.reports.concat(line.reports || []);
+        next.deleted = next.deleted.concat(line.deleted || []);
+        if (data === next) draw();
+        return;
       }
-      render();
+      if (!line.viewer) throw new Error("the answer came in the wrong order");
+      next = line;
+      next.reports = next.reports || [];
+      next.deleted = next.deleted || [];
+      if (!data || coming) {
+        data = next;
+        coming = true;
+        failed = "";
+        restoreView();
+        render();
+      }
+    }).then(function () {
+      if (!newest()) return;
+      if (!done) throw new Error("the answer was cut off");
+      if (data !== next && since !== edits) return load();
+      data = next;
+      coming = false;
+      failed = "";
+      loadedAt = Date.now();
+      draw(true);
     }).catch(function (err) {
-      var app = $("app");
-      app.textContent = "";
-      app.appendChild(h("div", { class: "page" }, h("p", { class: "error", text: "Could not load: " + err.message })));
-    }).then(function () { loading = null; });
+      if (!newest()) return;  // cancelled by a newer load
+      var partial = coming;
+      coming = false;
+      if (err.status === 401) { data = null; signedOut(); return; }
+      if (!data) { cannotLoad(err.message); return; }
+      if (partial) { failed = err.message; draw(true); return; }
+      toast("Could not refresh: " + err.message, { text: "Retry", onclick: load }, true);
+    }).then(function () {
+      if (newest()) { loading = null; cancel = null; }
+    });
     return loading;
+  }
+
+  // The saved view and table of last time, once the views are known.
+  function restoreView() {
+    if (state.loaded) return;
+    state.loaded = true;
+    ["reports", "milestones"].forEach(function (db) {
+      var saved = store("view:" + db);
+      if (saved && views(db).some(function (v) { return v.id === saved; })) state.view[db] = saved;
+    });
+    if (store("db") === "milestones" && data.team) state.db = "milestones";
+  }
+
+  // A render soon (at most every DRAW_MS), and only when nobody is typing in an inline edit, a
+  // popover, a dialog or an input method: those keep their text and caret; the rows wait.
+  var drawTimer = 0, composing = false;
+  function typing() { return !!(state.edit || state.menu || state.pop || closeDialog || composing); }
+  function draw(now) {
+    if (drawTimer) return;
+    drawTimer = setTimeout(function () {
+      drawTimer = 0;
+      if (typing()) draw(); else render();
+    }, now ? 0 : DRAW_MS);
+  }
+  document.addEventListener("compositionstart", function () { composing = true; });
+  document.addEventListener("compositionend", function () { composing = false; });
+
+  function skeleton() { return h("div", { class: "skeleton", "aria-hidden": "true" }, [1, 2, 3, 4, 5, 6, 7, 8].map(function () { return h("i"); })); }
+  function note(text) {
+    return h("p", { class: "loadnote", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), text);
+  }
+  function header() {
+    return h("header", { class: "head" }, h("h1", {}, h("span", { class: "mark", "aria-hidden": "true" }), "Ontic research"));
+  }
+  function screen(children) {
+    var app = $("app");
+    app.textContent = "";
+    app.appendChild(h("div", { class: "page" }, header(), children));
+  }
+  function loadingScreen() {
+    if (document.querySelector("#app .loading")) return;  // the page's own, before the script
+    screen([note("Loading reports"), skeleton()]);
+  }
+  function cannotLoad(message) {
+    screen(h("p", { class: "loadnote bad", role: "alert" }, "Could not load: " + message + ". ",
+      h("button", { type: "button", onclick: load }, "Retry")));
+  }
+  function signedOut() {
+    screen(h("p", { class: "loadnote bad", role: "alert" }, "Your sign-in has expired. ",
+      h("button", { type: "button", onclick: function () { location.reload(); } }, "Sign in again")));
+  }
+  // Beside the title: reports still coming, or why some are missing.
+  function loadState() {
+    var n = data.reports.length;
+    if (coming) return note(n ? "Loading, " + n + (n === 1 ? " report" : " reports") + " so far" : "Loading reports");
+    if (failed) {
+      return h("p", { class: "loadnote bad", role: "alert" }, "Some reports may be missing: " + failed + ". ",
+        h("button", { type: "button", onclick: load }, "Retry"));
+    }
+    return null;
   }
 
   function render() {
     var app = $("app");
     var scroll = window.scrollY;
-    var focused = document.activeElement && document.activeElement.id;
+    var active = document.activeElement, focused = active && active.id;
+    var caret = focused && typeof active.selectionStart === "number" ? [active.selectionStart, active.selectionEnd] : null;
+    clearTimeout(drawTimer);
+    drawTimer = 0;
     app.textContent = "";
     var dbs = [["reports", "Reports", "doc", data.reports.length]];
     if (data.team) dbs.push(["milestones", "Milestones", "flag", data.milestones.length]);
     app.appendChild(h("div", { class: "page" },
       h("header", { class: "head" },
         h("h1", {}, h("span", { class: "mark", "aria-hidden": "true" }), "Ontic research"),
-        h("span", { class: "grow" }), avatar(viewer)),
+        loadState(), h("span", { class: "grow" }), avatar(viewer)),
       dbs.length > 1 ? h("nav", { class: "dbs", "aria-label": "Tables" }, dbs.map(function (d) {
         return h("button", { class: "db", type: "button", "aria-pressed": String(state.db === d[0]),
           onclick: function () { state.db = d[0]; state.pop = ""; store("db", d[0]); render(); } },
@@ -373,7 +506,12 @@
     if (focused && $(focused)) {
       var el = $(focused);
       el.focus();
-      if (el.setSelectionRange && el.value) el.setSelectionRange(el.value.length, el.value.length);
+      if (el.setSelectionRange && el.value) {
+        try {
+          if (caret) el.setSelectionRange(Math.min(caret[0], el.value.length), Math.min(caret[1], el.value.length));
+          else el.setSelectionRange(el.value.length, el.value.length);
+        } catch (err) { /* inputs without a caret */ }
+      }
     }
   }
 
@@ -415,7 +553,8 @@
         } }, icon("cross")));
     })) : null;
     var body;
-    if (!list.length) body = h("div", { class: "none", text: rowsOf(db).length ? "No rows match this view." : db === "reports"
+    if (!list.length && coming && db === "reports") body = skeleton();
+    else if (!list.length) body = h("div", { class: "none", text: rowsOf(db).length ? "No rows match this view." : db === "reports"
       ? "No reports yet. Publish one, or press New." : "No milestones yet. Press New: a capability to show, or a question to resolve." });
     else if (c.layout === "board") body = board(list, c);
     else if (c.layout === "list") body = listLayout(list, c);
@@ -633,19 +772,28 @@
   }
 
   // Shown at once, saved in the background; on an error the truth comes back from the server.
+  // A change to a row goes to the one the editor holds and to the row of that name now in data: a
+  // refresh may have swapped the rows while the editor was open (it draws only once you are done).
+  function setRow(row, now, change) {
+    edits++;
+    [row].concat(now && now !== row ? [now] : []).forEach(function (x) {
+      Object.keys(change).forEach(function (k) { x[k] = change[k]; });
+    });
+  }
+  function reportNow(r) { return data.reports.filter(function (x) { return x.name === r.name; })[0]; }
   function saveLabels(r, change) {
-    Object.keys(change).forEach(function (k) { r[k] = change[k]; });
+    setRow(r, reportNow(r), change);
     render();
     api("POST", "/_api/pages/" + encodeURIComponent(r.name) + "/labels", change).then(function (answer) {
-      Object.keys(answer.report).forEach(function (k) { r[k] = answer.report[k]; });
+      setRow(r, reportNow(r), answer.report);
       render();
     }).catch(function (err) { toast(err.message, null, true); load(); });
   }
   function saveMilestoneField(m, change) {
-    Object.keys(change).forEach(function (k) { m[k] = change[k]; });
+    setRow(m, milestone(m.id), change);
     render();
     api("POST", "/_api/milestones/" + m.id, change).then(function (answer) {
-      Object.keys(answer.milestone).forEach(function (k) { m[k] = answer.milestone[k]; });
+      setRow(m, milestone(m.id), answer.milestone);
       render();
     }).catch(function (err) { toast(err.message, null, true); load(); });
   }
