@@ -7,8 +7,8 @@ at the bucket root):
                                              is shared with besides its owner
     <prefix><name>/comments.json             the comments, written by the gateway (comments.py)
     <prefix><name>/labels.json               pillar, tags, milestone, title as changed in the
-                                             overview, delivery mode, and deleted (hidden;
-                                             nothing is removed)
+                                             overview, delivery mode, deleted (hidden; nothing
+                                             is removed), owner and editors (who may change it)
     <prefix><name>/<version>/page.json       metadata of that version
     <prefix><name>/<version>/<files...>      the page itself
 
@@ -87,23 +87,63 @@ def check_visibility(level: str) -> str:
     return level
 
 
-def check_people(level: str, people, domain: str = "") -> list[str]:
-    """The people a private page is shared with besides its owner, as kept: lowercase emails
-    (at `domain` when given), no repeats, sorted. Only private takes people; share another
-    level and the list is gone."""
+def check_emails(what: str, people, domain: str = "") -> list[str]:
+    """A list of team emails as kept: lowercase (at `domain` when given), no repeats, sorted,
+    at most MAX_PEOPLE. `what` names the list in errors (people, editors)."""
     if not isinstance(people, (list, tuple)) or not all(isinstance(p, str) for p in people):
-        raise ValueError("people: a list of emails")
+        raise ValueError(f"{what}: a list of emails")
     people = sorted({p.strip().lower() for p in people} - {""})
-    if people and level != "private":
-        given = f"not {level}" if level else "give the private level with them"
-        raise ValueError(f"only a private page is shared with people ({given})")
     for person in people:
         if not PERSON_RE.match(person) or (domain and not person.endswith("@" + domain.lower())):
             at = f" at @{domain}" if domain else ""
-            raise ValueError(f"bad email {person!r}: share with team accounts{at} only")
+            raise ValueError(f"bad email {person!r}: {what} are team accounts{at} only")
     if len(people) > MAX_PEOPLE:
-        raise ValueError(f"at most {MAX_PEOPLE} people")
+        raise ValueError(f"at most {MAX_PEOPLE} {what}")
     return people
+
+
+def check_people(level: str, people, domain: str = "") -> list[str]:
+    """The people a private page is shared with besides its owner (check_emails). Only private
+    takes people; share another level and the list is gone."""
+    people = check_emails("people", people, domain)
+    if people and level != "private":
+        given = f"not {level}" if level else "give the private level with them"
+        raise ValueError(f"only a private page is shared with people ({given})")
+    return people
+
+
+def check_editors(editors, domain: str = "") -> list[str]:
+    """The people who may change a page besides its owner (edit text, publish, set-current),
+    whatever its visibility: labels.json `editors` (check_emails)."""
+    return check_emails("editors", editors, domain)
+
+
+def editors_of(labels: dict) -> tuple[str, ...]:
+    """labels.json's editors as kept, ignoring anything that is no email."""
+    given = labels.get("editors")
+    if not isinstance(given, list):
+        return ()
+    emails = {e.strip().lower() for e in given if isinstance(e, str)}
+    return tuple(sorted(e for e in emails if PERSON_RE.match(e))[:MAX_PEOPLE])
+
+
+def owner_of(labels: dict, published_by: str) -> str:
+    """The page's owner: labels.json `owner` when set (a page with editors keeps it there, so a
+    version an editor publishes does not move it), else the current version's publisher."""
+    owner = labels.get("owner")
+    return owner.strip() if isinstance(owner, str) and owner.strip() else published_by
+
+
+def may_change(email: str, owner: str, editors, domain: str = "") -> bool:
+    """The owner, or an editor at the domain, may edit the page's text, publish a new version
+    and switch the current one."""
+    email = email.strip().lower()
+    if not email:
+        return False
+    if email == owner.strip().lower():
+        return True
+    team = not domain or email.endswith("@" + domain.lower())
+    return team and email in editors
 
 
 def check_pillar(pillar: str) -> str:

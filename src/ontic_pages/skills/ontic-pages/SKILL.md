@@ -160,6 +160,12 @@ Visibility belongs to the page, not to a version. The link is the same at every 
 nobody, for the publisher alone). `info` and `list` show whom a page is shared with. The owner
 can also change it from the Share button in the bar.
 
+Editors: `ontic pages share depth-eval --edit georg@onticlabs.io` (repeatable, the whole list;
+`--no-editors` clears it) lets them edit the text in the bar, publish new versions of the page
+(`publish --name depth-eval`) and set the current version, at any level; sharing and deleting
+stay with the owner, who stays the owner. The owner can also set it in the Share panel ("Can
+edit"). `info` shows the editors.
+
 ## Versions
 
 ```bash

@@ -1,13 +1,13 @@
 """Saving text edited in the bar as a new version. Nothing is overwritten.
 
 The bar's edit mode (static/edit.js, static/edit-bridge.js) sends what the page's visible text was
-and what it is now, per element: {version, path, changes: [{before, after}]}. Only the owner may
-save, and only onto the current version. Each `before` is looked up in the HTML source of the file
-at `path`, in its text only (not in tags, scripts, styles or the title), as written there: either
-as is or with character references (&amp;, &#233;, &nbsp;). It must be found exactly once (a text
-that fills a whole element wins over the same words inside a longer text); otherwise nothing is
-saved and the answer names each change that could not be placed. Only the part that changed is
-replaced, html-escaped.
+and what it is now, per element: {version, path, changes: [{before, after}]}. The owner or an
+editor may save, and only onto the current version. Each `before` is looked up in the HTML source
+of the file at `path`, in its text only (not in tags, scripts, styles or the title), as written
+there: either as is or with character references (&amp;, &#233;, &nbsp;). It must be found
+exactly once (a text that fills a whole element wins over the same words inside a longer text);
+otherwise nothing is saved and the answer names each change that could not be placed. Only the
+part that changed is replaced, html-escaped.
 
 The new version is the old one with that one file patched: every other file is copied inside the
 bucket (copy_object; the bytes never pass through the gateway) while the gateway writes the
@@ -42,7 +42,7 @@ from .publish import (
     page_lock,
     page_record,
 )
-from .store import VERSION_RE, Store
+from .store import VERSION_RE, Store, editors_of, may_change, owner_of
 from .uploads import Refused, Uploads
 
 MAX_CHANGES = 500
@@ -296,7 +296,7 @@ def save(
         # The page's state as it is now, with its generation: kept after the commit only if no
         # other change to the page (visibility, current, a publish) came in meanwhile.
         snapshot = pages.snapshot(name) if pages else (0, 0.0, (None, "", "", ()))
-        current, visibility, _, people = snapshot[2]
+        current, visibility, owner, people = snapshot[2]
         if current != version:
             current = store.current(name)
         if not current:
@@ -304,8 +304,11 @@ def save(
         if version != current:
             raise Refused(409, STALE)
         old = files.meta(name, current)
-        if who.strip().lower() != (old.get("published_by") or "").strip().lower():
-            raise Refused(403, "only the owner can edit this page")
+        labels = pages.labels.get(name) if pages else store.labels(name)
+        if not owner:
+            owner = owner_of(labels, old.get("published_by") or "")
+        if not may_change(who, owner, editors_of(labels)):
+            raise Refused(403, "only the owner or an editor can edit this page")
         if old.get("format") == "markdown":
             raise Refused(409, "a Markdown update is edited from the overview (Edit)")
         # Under way while the file is read and patched: the new version id, the file list, and
@@ -359,7 +362,7 @@ def save(
                 if pages:
                     pages.forget(name)
                 raise Refused(409, STALE)
-            meta_tag = finish(store, page, None)
+            meta_tag = finish(store, page, None, before=old.get("published_by") or "")
             phases.lap("commit")
         finally:
             if uploads and reserving.exception() is None:
@@ -382,5 +385,5 @@ def save(
                 versions = sorted({*listed.result(), current, new})
             except Exception:  # the list is asked again when needed
                 versions = None
-            pages.put(name, snapshot, (new, visibility, who, people), versions)
+            pages.put(name, snapshot, (new, visibility, owner, people), versions)
     return page

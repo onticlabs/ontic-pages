@@ -17,8 +17,10 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
     GET  /_api/me                       who is asking
     POST /_api/pages/<name>/visibility  {"visibility": ..., "people": [emails]} (people only
                                         with private), by the owner only
+    POST /_api/pages/<name>/editors     {"editors": [emails]}: who may change the page besides
+                                        the owner (edit text, publish, current), owner only
     POST /_api/pages/<name>/delivery    {"delivery": "server"|"direct"}, owner recovery override
-    POST /_api/pages/<name>/current     {"version": ...}, by the owner only
+    POST /_api/pages/<name>/current     {"version": ...}, by the owner or an editor
     POST /_api/pages/<name>/versions    publish: start (uploads.py); then .../<version>/files for
                                         more of the file list, and .../<version>/commit
     GET  /_api/pages/<name>/comments    every comment thread (comments.py), signed in
@@ -26,7 +28,7 @@ On the apex (the host of ONTIC_PAGES_URL, pages.onticlabs.io):
                                         .../<thread>/reply {"body"}, .../<thread>/resolve
                                         {"resolved"}, .../<thread>/<comment>/delete (its author)
     POST /_api/pages/<name>/edits       {version, path, changes}: text edited in the bar, saved
-                                        as a new version, by the owner only (edits.py)
+                                        as a new version, by the owner or an editor (edits.py)
     POST /_api/pages/<name>/labels      {pillar, tags, milestone, title, description}: the
                                         owner relinks a report (a new version, files copied)
     GET  /_api/pages/<name>/source      a Markdown update's source, for Edit in the overview
@@ -59,9 +61,10 @@ On any host: GET /_health. On other hosts only (Caddy asks on 127.0.0.1): GET /_
 Who is asking comes from oauth2-proxy (auth.py), never from identity request headers, or from a
 signed token (`Authorization: Bearer`, the command line, tokens.py), which is refused from a
 browser (any Origin or Sec-Fetch-Site). Access, checked before every answer: public anyone,
-ontic an @<email domain> address, private the current version's publisher and the people it is
-shared with (at the email domain too). Writes go to the apex only: from the apex itself
-(Sec-Fetch-Site, Origin) or with a token.
+ontic an @<email domain> address, private the page's owner, its editors and the people it is
+shared with (at the email domain too). The owner is labels.json's `owner`, else the current
+version's publisher; editors (labels.json) may also edit text, publish and set current. Writes
+go to the apex only: from the apex itself (Sec-Fetch-Site, Origin) or with a token.
 """
 
 from __future__ import annotations
@@ -126,9 +129,13 @@ from .store import (
     VERSION_RE,
     VISIBILITIES,
     Store,
+    check_editors,
     check_name,
     check_people,
     content_type,
+    editors_of,
+    may_change,
+    owner_of,
 )
 from .tokens import LoginCodes, check_secret, sign, verify
 from .uploads import Refused, Uploads
@@ -148,7 +155,7 @@ API_FILES = re.compile(r"^/_api/pages/([^/]+)/files$")
 API_VERSION = re.compile(r"^/_api/pages/([^/]+)/versions/(\d{8}T\d{6}Z)$")
 API_WRITE = re.compile(
     r"^/_api/pages/([^/]+)/"
-    r"(visibility|delivery|current|edits|labels|delete|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
+    r"(visibility|editors|delivery|current|edits|labels|delete|versions|versions/(\d{8}T\d{6}Z)/(files|commit))$"
 )
 API_SOURCE = re.compile(r"^/_api/pages/([^/]+)/source$")
 RESEARCH_WRITE = re.compile(
@@ -233,7 +240,8 @@ class Gateway:
         self.store, self.site, self.identity = store, site, identity
         self.files = FileCache(store, cache_bytes, file_bytes)
         self.direct = DirectLinks(store) if direct_files else None  # see send_content
-        self.pages = PageCache(store, self.files, ttl)
+        self.labels = LabelCache(store, ttl)
+        self.pages = PageCache(store, self.files, ttl, self.labels)
         self.assets = Assets(site.origin)
         self.limit = RateLimit()
         self.token_secret = check_secret(token_secret) if token_secret else ""
@@ -242,7 +250,6 @@ class Gateway:
         self.comments = Comments(store, ttl)
         self.milestones = Milestones(store, ttl)
         self.views = Views(store, ttl)
-        self.labels = LabelCache(store, ttl)
         # The list of pages changes only when a page is first published; kept longer.
         self.names = NameCache(store, NAMES_TTL_FACTOR * ttl)
         # Reads each page's state for the overview and listings, a few at a time (visible).
@@ -317,6 +324,20 @@ class Gateway:
         """Every milestone but those in the bin."""
         return [m for m in self.milestones.items() if not m.get("deleted")]
 
+    def editors(self, name: str) -> tuple[str, ...]:
+        """Who may change the page besides its owner (labels.json, Store.editors_of)."""
+        return editors_of(self.labels.get(name))
+
+    def openers(self, name: str, people) -> tuple[str, ...]:
+        """Who may open a private page besides its owner: the people it is shared with and
+        its editors (allowed)."""
+        editors = self.editors(name)
+        return tuple(people) + tuple(e for e in editors if e not in people) if editors else people
+
+    def may_change(self, name: str, owner: str, email: str) -> bool:
+        """The owner, or an editor on the team: edit text, publish, set current."""
+        return may_change(email, owner, self.editors(name), self.site.email_domain)
+
     def lookup(self, name: str) -> tuple[str | None, str, str, tuple[str, ...]]:
         """(current, visibility, owner, people) of a page to serve: a deleted one has no
         current."""
@@ -330,8 +351,8 @@ class Gateway:
         return effective(self.files.meta(name, version), self.labels.get(name))
 
     def visible(self, email: str, deleted: bool = False):
-        """(name, current, visibility, owner, page.json with its labels, people) of each page
-        this viewer may open; with deleted, only the deleted ones this viewer owns."""
+        """(name, current, visibility, owner, page.json with its labels, people, editors) of
+        each page this viewer may open; with deleted, only the deleted ones this viewer owns."""
         for row, gone in self.openable(email):
             if gone == deleted:
                 yield row
@@ -362,12 +383,14 @@ class Gateway:
 
         def state(name: str):
             version, visibility, owner, people = self.pages.get(name)
-            if not version or not allowed(visibility, owner, email, domain, people):
+            readers = self.openers(name, people) if visibility == "private" else people
+            if not version or not allowed(visibility, owner, email, domain, readers):
                 return None
             gone = bool(self.labels.get(name).get("deleted"))
             if gone and owner.strip().lower() != email.strip().lower():
                 return None
-            row = (name, version, visibility, owner, self.meta(name, version), people)
+            row = (name, version, visibility, owner, self.meta(name, version), people,
+                   self.editors(name))  # fmt: skip
             return row, gone
 
         return state
@@ -398,15 +421,21 @@ class Gateway:
             "visibility": visibility,
             "delivery": "direct" if self.labels.get(name).get("delivery") == "direct" else "server",
             "people": list(people) if email else [],
+            "editors": list(self.editors(name)) if email else [],
             "current": current,
             "published_by": owner if email else "",
-            "role": "owner" if email and email.lower() == owner.strip().lower() else "viewer",
+            "role": self.role(name, owner, email),
             "viewer": email,
             "email_domain": self.site.email_domain,
             "content_origin": self.site.content_origin(name),
             "versions": versions,
             "milestones": self.milestone_titles(versions) if self.team(email) else {},
         }
+
+    def role(self, name: str, owner: str, email: str) -> str:
+        if email and email.strip().lower() == owner.strip().lower():
+            return "owner"
+        return "editor" if self.may_change(name, owner, email) else "viewer"
 
     def milestone_titles(self, versions: list[dict]) -> dict:
         """id -> {title, status} of the milestones these versions point at, for the bar."""
@@ -418,8 +447,11 @@ class Gateway:
         }
 
 
-def report(name: str, version: str, visibility: str, owner: str, meta: dict, people=()) -> dict:
-    """One row of the overview's reports table (people: whom a private one is shared with)."""
+def report(
+    name: str, version: str, visibility: str, owner: str, meta: dict, people=(), editors=()
+) -> dict:
+    """One row of the overview's reports table (people: whom a private one is shared with,
+    editors: who may change it besides its owner)."""
     milestone = meta.get("milestone")
     return {
         "name": name,
@@ -433,6 +465,7 @@ def report(name: str, version: str, visibility: str, owner: str, meta: dict, peo
         "published_at": meta.get("published_at") or "",
         "visibility": visibility,
         "people": list(people),
+        "editors": list(editors),
         "format": meta.get("format") or "html",
     }
 
@@ -452,7 +485,7 @@ def listing_html(gw: Gateway, email: str, query: str = "") -> str:
     tag = asked.get("tag", [""])[0].strip().lower()
     counts = {p: 0 for p in PILLARS}
     rows = []
-    for name, version, visibility, owner, meta, _ in gw.visible(email):
+    for name, version, visibility, owner, meta, *_ in gw.visible(email):
         if tag and tag not in tags_of(meta):
             continue
         counts[pillar_of(meta)] += 1
@@ -596,7 +629,7 @@ def make_handler(gw: Gateway):
             if visibility == "public":
                 return True
             email = self.email()
-            if allowed(visibility, owner, email, site.email_domain, people):
+            if allowed(visibility, owner, email, site.email_domain, gw.openers(name, people)):
                 return True
             if email:
                 self.forbidden(name, visibility)
@@ -843,7 +876,7 @@ def make_handler(gw: Gateway):
             if not version:
                 return self.send_json(404, {"error": f"no page named {name}"})
             email = self.email(required=required or visibility != "public")
-            if not allowed(visibility, owner, email, site.email_domain, people):
+            if not allowed(visibility, owner, email, site.email_domain, gw.openers(name, people)):
                 code, error = (403, "not allowed") if email else (401, "sign in first")
                 return self.send_json(code, {"error": error})
             return version, visibility, owner, email, people
@@ -901,6 +934,7 @@ def make_handler(gw: Gateway):
                     "name": name,
                     "visibility": visibility,
                     "people": list(people),
+                    "editors": list(editors),
                     "current": version,
                     "published_by": owner,
                     "published_at": meta.get("published_at", ""),
@@ -910,7 +944,7 @@ def make_handler(gw: Gateway):
                     "title": meta.get("title") or "",
                     "milestone": meta.get("milestone") or "",
                 }
-                for name, version, visibility, owner, meta, people in gw.visible(email)
+                for name, version, visibility, owner, meta, people, editors in gw.visible(email)
             ]
             self.send_json(200, {"pages": pages})
 
@@ -1090,6 +1124,12 @@ def make_handler(gw: Gateway):
                     delivery = data.get("delivery")
                     if delivery not in ("server", "direct"):
                         return self.send_json(400, {"error": "delivery: server or direct"})
+                elif m.group(2) == "editors":
+                    try:  # the whole list: absent or empty means the owner alone
+                        editors = check_editors(data.get("editors") or [], site.email_domain)
+                    except ValueError as err:
+                        return self.send_json(400, {"error": str(err)})
+                    editors = [e for e in editors if e != owner.strip().lower()]
                 else:
                     version = data.get("version")
                     if (
@@ -1098,17 +1138,28 @@ def make_handler(gw: Gateway):
                         or (version not in gw.store.versions(name))
                     ):
                         return self.send_json(400, {"error": f"{name} has no such version"})
-                if email.strip().lower() != owner.strip().lower():
+                owns = email.strip().lower() == owner.strip().lower()
+                if m.group(2) != "current" and not owns:
                     return self.send_json(403, {"error": "only the owner can change this"})
                 if m.group(2) == "visibility":
                     gw.store.set_visibility(name, level, people)
-                elif m.group(2) == "delivery":
-                    with page_lock(name):  # not between a publish's read and write of labels
-                        labels = {**gw.store.labels(name), "delivery": delivery}
-                        gw.store.set_labels(name, labels)
-                        gw.labels.put(name, labels)
                 else:
-                    gw.store.set_current(name, version)
+                    with page_lock(name):  # not between a publish's read and write of labels
+                        labels = {**gw.store.labels(name)}
+                        if m.group(2) == "current":
+                            # An editor's right as it is now, not as cached a moment ago.
+                            if not may_change(email, owner_of(labels, owner), editors_of(labels),
+                                              site.email_domain):  # fmt: skip
+                                error = "only the owner or an editor can change this"
+                                return self.send_json(403, {"error": error})
+                            gw.store.set_current(name, version)
+                        else:
+                            if m.group(2) == "delivery":
+                                labels["delivery"] = delivery
+                            else:  # the owner goes on record with the first editors (owner_of)
+                                labels.update(owner=owner_of(labels, owner), editors=editors)
+                            gw.store.set_labels(name, labels)
+                            gw.labels.put(name, labels)
                 gw.pages.forget(name)
                 self.send_json(200, gw.facts(name, email))
             except IdentityUnavailable:
@@ -1236,14 +1287,15 @@ def make_handler(gw: Gateway):
                 raise Refused(400, "title: text")
             given = {"pillar": pillar, "tags": tags, "milestone": milestone,
                      "title": None if title is None else clean_title(title)}  # fmt: skip
-            labels = {**gw.labels.get(name)}
-            meta = gw.meta(name, current)
-            for key in LABEL_KEYS:
-                labels.setdefault(key, meta.get(key))
-            labels.update({k: v for k, v in given.items() if v is not None})
-            labels.update(updated_by=email, updated_at=now())
-            gw.store.set_labels(name, labels)
-            gw.labels.put(name, labels)
+            with page_lock(name):  # never over an editors or delivery change
+                labels = {**gw.store.labels(name)}
+                meta = gw.meta(name, current)
+                for key in LABEL_KEYS:
+                    labels.setdefault(key, meta.get(key))
+                labels.update({k: v for k, v in given.items() if v is not None})
+                labels.update(updated_by=email, updated_at=now())
+                gw.store.set_labels(name, labels)
+                gw.labels.put(name, labels)
             self.log_message("labels %s", name)
             self.send_json(200, {"report": report(name, current, visibility, owner,
                                                   gw.meta(name, current), people)})  # fmt: skip
@@ -1266,32 +1318,41 @@ def make_handler(gw: Gateway):
             deleted = (data or {}).get("deleted", True) if isinstance(data, dict) else True
             if not isinstance(deleted, bool):
                 raise Refused(400, "deleted: true or false")
-            labels = {**gw.labels.get(name), "deleted": deleted, "deleted_by": email,
-                      "deleted_at": now()}  # fmt: skip
-            if not deleted:
-                for key in ("deleted", "deleted_by", "deleted_at"):
-                    labels.pop(key, None)
-            gw.store.set_labels(name, labels)
-            gw.labels.put(name, labels)
+            with page_lock(name):  # never over an editors or delivery change
+                labels = {**gw.store.labels(name), "deleted": deleted, "deleted_by": email,
+                          "deleted_at": now()}  # fmt: skip
+                if not deleted:
+                    for key in ("deleted", "deleted_by", "deleted_at"):
+                        labels.pop(key, None)
+                gw.store.set_labels(name, labels)
+                gw.labels.put(name, labels)
             self.log_message("%s %s", "delete" if deleted else "restore", name)
             self.send_json(200, {"name": name, "deleted": deleted})
 
-        def may_publish(self, name: str) -> str:
-            """The publisher's email: a team member for a new page, the owner for a new version
-            of an existing one. Raises Refused otherwise."""
+        def may_publish(self, name: str, data=None) -> str:
+            """The publisher's email: a team member for a new page, the owner or an editor for
+            a new version of an existing one (`data`: the start request). Raises Refused
+            otherwise."""
             email = self.email()
             if not email:
                 raise Refused(401, EXPIRED)
             gw.pages.forget(name)
             current, _, owner, _ = gw.pages.get(name)
-            if current and email.strip().lower() != owner.strip().lower():
+            if current and not gw.may_change(name, owner, email):
                 raise Refused(
                     403,
-                    f"{name} belongs to {owner or 'someone else'}; only they can "
-                    "publish a new version of it (pick another name)",
+                    f"{name} belongs to {owner or 'someone else'}; only they and its editors "
+                    "can publish a new version of it (pick another name)",
                 )
             if not current and not allowed("ontic", "", email, site.email_domain):
                 raise Refused(403, f"only @{site.email_domain} accounts can create pages")
+            if current and email.strip().lower() != owner.strip().lower():
+                # An editor publishes a version, nothing more: who may open the page stays the
+                # owner's call, and a deleted page is theirs to bring back.
+                if gw.labels.get(name).get("deleted"):
+                    raise Refused(404, f"no page named {name}")
+                if isinstance(data, dict) and (data.get("visibility") or data.get("people")):
+                    raise Refused(403, f"only {owner} can change who may open {name}")
             return email
 
         def publish_start(self, name: str, data):
@@ -1301,7 +1362,7 @@ def make_handler(gw: Gateway):
                 raise Refused(400, str(err)) from None
             if not isinstance(data, dict):
                 raise Refused(400, "send {files, description, meta, git, visibility}")
-            email = self.may_publish(name)
+            email = self.may_publish(name, data)
             if not gw.limit.allow(email.lower()):
                 raise Refused(429, "too many changes, wait a minute")
             up, uploads = gw.uploads.start(name, email, data)
@@ -1328,7 +1389,7 @@ def make_handler(gw: Gateway):
             })  # fmt: skip
 
         def save_edits(self, name: str, data):
-            """Text edited in the bar, as a new version (edits.py checks owner and version). The
+            """Text edited in the bar, as a new version (edits.py checks the version too). The
             answer is built from what the save put in the caches; one log line times it."""
             phases = Phases()
             found = self.api_page(name, required=True)
@@ -1337,8 +1398,8 @@ def make_handler(gw: Gateway):
             email = found[3]
             if not email:
                 raise Refused(401, EXPIRED)
-            if email.strip().lower() != found[2].strip().lower():
-                raise Refused(403, "only the owner can edit this page")
+            if not gw.may_change(name, found[2], email):
+                raise Refused(403, "only the owner or an editor can edit this page")
             if not gw.limit.allow(email.lower()):
                 raise Refused(429, "too many changes, wait a minute")
             phases.lap("lookup")

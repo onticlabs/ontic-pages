@@ -256,7 +256,7 @@ def test_gateway_edits_owner_only_and_from_the_bar(serve, store, page):
     server = serve()
     data = body(page, change("Results", "Findings"))
     status, answer = post(server, data, who=OTHER)
-    assert (status, answer["error"]) == (403, "only the owner can edit this page")
+    assert (status, answer["error"]) == (403, "only the owner or an editor can edit this page")
     assert post(server, data, who=None)[0] == 401
     assert post(server, data, headers={"Sec-Fetch-Site": "same-site"})[0] == 403
     assert post(server, data, headers={"Origin": "https://report.pages.test"})[0] == 403
@@ -286,6 +286,7 @@ def caches(store, ttl=60.0, **sizes):
 def warm(files, pages, page):
     """What a gateway holds after showing the page: its state, versions and files."""
     pages.get("report")
+    pages.labels.get("report")
     pages.versions("report")
     for path in ("index.html", "style.css", "app.js", "data.json", "img/dot.png"):
         files.get("report", page["version"], path)

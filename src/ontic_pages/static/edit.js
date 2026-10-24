@@ -1,4 +1,4 @@
-// Edit text in place, the bar's side (served as part of bar.js, after it). For the page's owner
+// Edit text in place, the bar's side (served as part of bar.js, after it). For the page's owner or editors
 // on the current version, editing is always on: each time a page loads in the frame the bar
 // tells it so (edit-mode), and the page makes its texts editable (edit-bridge.js). The bar shows
 // nothing about it until a text changed; then "N changes", Save and Discard (Discard asks here
@@ -47,7 +47,8 @@
 
   function allowed() {
     var page = bar.page();
-    return page.role === "owner" && (!bar.view.version || bar.view.version === page.current);
+    var may = page.role === "owner" || page.role === "editor";
+    return may && (!bar.view.version || bar.view.version === page.current);
   }
 
   function busy() { return state === "saving" || state === "posting"; }
