@@ -222,3 +222,77 @@ def test_cli_direct(cli_env, site, capsys, monkeypatch):
     assert store.labels("report")["editors"] == []
     with pytest.raises(SystemExit, match="takes no --edit"):
         main(["share", "report", "--no-editors", "--edit", EDITOR])
+
+
+def test_rights_checked_again_at_commit(local, store, site):
+    """An editor's publish under way: the rights as they are when the version is written."""
+    publish(store, site, "report", published_by=OWNER, now=T1)
+    store.set_labels("report", {**store.labels("report"), "editors": [EDITOR]})
+    srv = local()
+    files = {"files": files_of(("index.html", 5))}
+    start = "/_api/pages/report/versions"
+    # Taken off the list meanwhile: refused at commit, nothing written as current.
+    _, mine = call(srv, start, EDITOR, files)
+    upload(mine, {"index.html": b"<p/>!"})
+    store.set_labels("report", {**store.labels("report"), "editors": []})
+    status, answer = call(srv, f"{start}/{mine['version']}/commit", EDITOR, {})
+    assert status == 403 and "belongs to owner@onticlabs.io" in answer["error"]
+    assert store.current("report") != mine["version"]
+    # Started as the owner of a name nobody had, with a level; someone else took the name and
+    # named them editor meanwhile: the level in the pending publish is not theirs to set.
+    _, theirs = call(srv, "/_api/pages/fresh/versions", EDITOR, {**files, "visibility": "public"})
+    upload(theirs, {"index.html": b"<p/>!"})
+    publish(store, site, "fresh", published_by=OWNER, visibility="private", now=T1)
+    store.set_labels("fresh", {**store.labels("fresh"), "editors": [EDITOR]})
+    status, answer = call(srv, f"/_api/pages/fresh/versions/{theirs['version']}/commit", EDITOR, {})
+    assert status == 403 and "can change who may open fresh" in answer["error"]
+    assert store.visibility("fresh") == "private"
+    # Deleted meanwhile: not brought back by an editor's commit.
+    store.set_labels("report", {**store.labels("report"), "editors": [EDITOR]})
+    _, mine = call(srv, start, EDITOR, files)
+    upload(mine, {"index.html": b"<p/>!"})
+    store.set_labels("report", {**store.labels("report"), "deleted": True})
+    assert call(srv, f"{start}/{mine['version']}/commit", EDITOR, {})[0] == 404
+    assert store.labels("report")["deleted"] is True
+
+
+def test_saved_edit_never_restores_a_deleted_page(serve, store, page):
+    server = serve(ttl=60)
+    assert request(server, "/_api/pages/report", who=OWNER)[0] == 200  # the state is cached
+    assert post(server, "delete", {}, who=OWNER)[0] == 200
+    status, answer = post(server, "edits", body(page, change("Results", "Findings")), who=OWNER)
+    assert status == 404
+    assert store.labels("report")["deleted"] is True
+    assert store.current("report") == page["version"]
+
+
+def test_set_current_pins_the_owner_of_an_old_page(store, site, serve, cli_env, monkeypatch):
+    """A page from before editors (no owner in labels.json) whose versions were published by
+    different people keeps its owner, the publisher of the current version, when another
+    version becomes current."""
+    first = publish(store, site, "report", published_by=OTHER, now=T1)
+    second = publish(store, site, "report", published_by=OWNER)
+    store.set_labels("report", {"delivery": "server"})  # as left by an older gateway
+    server = serve()
+    status, answer = post(server, "current", {"version": first["version"]}, who=OTHER)
+    assert status == 403
+    status, answer = post(server, "current", {"version": first["version"]})
+    assert (status, answer["current"], answer["role"]) == (200, first["version"], "owner")
+    assert store.labels("report")["owner"] == OWNER
+    facts = json.loads(request(server, "/_api/pages/report", who=OTHER)[2])
+    assert (facts["role"], facts["published_by"]) == ("viewer", OWNER)
+    # The same with --direct.
+    store.set_labels("report", {"delivery": "server"})
+    store.set_current("report", second["version"])
+    monkeypatch.setenv("ONTIC_PAGES_EMAIL", OWNER)
+    main(["set-current", "report", first["version"]])
+    assert store.labels("report")["owner"] == OWNER
+
+
+def test_relabel_keeps_the_editors_in_the_row(serve, store, page):
+    store.set_labels("report", {**store.labels("report"), "editors": [EDITOR]})
+    server = serve()
+    status, answer = post(server, "labels", {"title": "Renamed"}, who=EDITOR)
+    assert status == 200
+    assert (answer["report"]["title"], answer["report"]["editors"]) == ("Renamed", [EDITOR])
+    assert store.labels("report")["editors"] == [EDITOR]  # untouched by the relabel

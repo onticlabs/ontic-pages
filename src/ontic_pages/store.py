@@ -138,12 +138,8 @@ def may_change(email: str, owner: str, editors, domain: str = "") -> bool:
     """The owner, or an editor at the domain, may edit the page's text, publish a new version
     and switch the current one."""
     email = email.strip().lower()
-    if not email:
-        return False
-    if email == owner.strip().lower():
-        return True
-    team = not domain or email.endswith("@" + domain.lower())
-    return team and email in editors
+    team = bool(email) and (not domain or email.endswith("@" + domain.lower()))
+    return team and (email == owner.strip().lower() or email in editors)
 
 
 def check_pillar(pillar: str) -> str:

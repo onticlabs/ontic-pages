@@ -288,6 +288,10 @@ def cmd_set_current(args) -> None:
     store, cfg = open_store(args)
     if not VERSION_RE.match(args.version) or args.version not in store.versions(args.name):
         raise SystemExit(f"{args.name} has no version {args.version} (see: list --name)")
+    labels, current = store.labels(args.name), store.current(args.name)
+    if not owner_of(labels, "") and current:  # the owner stays, whoever published the version
+        owner = store.meta(args.name, current).get("published_by", "")
+        store.set_labels(args.name, {**labels, "owner": owner})
     store.set_current(args.name, args.version)
     print(f"{args.name} now serves {args.version}")
     print(url_for(store, cfg, args.name))

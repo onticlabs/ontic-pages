@@ -144,7 +144,7 @@
   function titleOf(r) { return r.title || r.description || r.name; }
   function reportUrl(r) { return "/" + encodeURIComponent(r.name) + "/"; }
   function mine(r) { return r.author && r.author.toLowerCase() === viewer.toLowerCase(); }
-  function edits(r) {  // the owner, or an editor the owner named (Share panel, "Can edit")
+  function mayEdit(r) {  // the owner, or an editor the owner named (Share panel, "Can edit")
     return mine(r) || (r.editors || []).some(function (e) { return e.toLowerCase() === viewer.toLowerCase(); });
   }
   function linked(m) { return data.reports.filter(function (r) { return r.milestone === m.id; }); }
@@ -838,7 +838,7 @@
       if (data.team) items.push(h("button", { class: "pitem", type: "button", onclick: function () {
         state.menu = ""; state.edit = id + "\ntitle"; render();
       } }, icon("edit"), "Rename"));
-      if (edits(row) && row.format === "markdown") items.push(h("button", { class: "pitem", type: "button",
+      if (mayEdit(row) && row.format === "markdown") items.push(h("button", { class: "pitem", type: "button",
         onclick: function () { state.menu = ""; render(); editUpdate(row); } }, icon("edit"), "Edit the update"));
       if (mine(row)) items.push(h("button", { class: "pitem danger", type: "button",
         onclick: function () { state.menu = ""; render(); confirmDelete(row); } }, icon("cross"), "Delete"));

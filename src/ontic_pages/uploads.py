@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .info import stamp
@@ -232,21 +233,25 @@ class Uploads:
             uploads.append({"path": path, "url": url, "headers": headers})
         return uploads
 
-    def commit(self, name: str, version: str, who: str) -> tuple[dict, str | None]:
+    def commit(
+        self, name: str, version: str, who: str, check: Callable[[Pending], None] | None = None
+    ) -> tuple[dict, str | None]:
         """Check every file is there with its size, then write the version. Returns page.json and
-        the visibility it set (or None)."""
+        the visibility it set (or None). `check(up)` runs under the page's lock right before
+        the version is written: the gateway asks again whether `who` may still publish it, and
+        with these settings (an editor's rights may have gone meanwhile)."""
         up = self.get(name, version, who)
         with self.lock:  # one commit at a time; put back if the files are not all there
             if self.pending.pop((name, version), None) is None:
                 raise Refused(409, f"{name} {version} is being committed already")
         try:
-            return self._commit(up)
+            return self._commit(up, check)
         except BaseException:
             with self.lock:
                 self.pending[(name, version)] = up
             raise
 
-    def _commit(self, up: Pending) -> tuple[dict, str | None]:
+    def _commit(self, up: Pending, check=None) -> tuple[dict, str | None]:
         name, version = up.name, up.version
         found = self.store.sizes(self.store.key(name, version) + "/")
         wrong = [
@@ -283,5 +288,7 @@ class Uploads:
             len(up.files) + len(made) + kept, tagged, title, fmt,
         )  # fmt: skip
         with page_lock(name):
+            if check:
+                check(up)
             finish(self.store, page, up.visibility, up.people)
         return page, up.visibility

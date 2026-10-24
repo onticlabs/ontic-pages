@@ -1152,6 +1152,10 @@ def make_handler(gw: Gateway):
                                               site.email_domain):  # fmt: skip
                                 error = "only the owner or an editor can change this"
                                 return self.send_json(403, {"error": error})
+                            if not owner_of(labels, ""):  # a page from before editors: the
+                                labels["owner"] = owner  # owner stays, whoever published it
+                                gw.store.set_labels(name, labels)
+                                gw.labels.put(name, labels)
                             gw.store.set_current(name, version)
                         else:
                             if m.group(2) == "delivery":
@@ -1298,7 +1302,8 @@ def make_handler(gw: Gateway):
                 gw.labels.put(name, labels)
             self.log_message("labels %s", name)
             self.send_json(200, {"report": report(name, current, visibility, owner,
-                                                  gw.meta(name, current), people)})  # fmt: skip
+                                                  gw.meta(name, current), people,
+                                                  gw.editors(name))})  # fmt: skip
 
         def delete_page(self, name: str, data):
             """The owner deletes a page, or brings it back ({"deleted": false}): it is hidden
@@ -1355,6 +1360,24 @@ def make_handler(gw: Gateway):
                     raise Refused(403, f"only {owner} can change who may open {name}")
             return email
 
+        def may_commit(self, up) -> None:
+            """Under the page's lock, right before its version is written: the publisher may
+            still publish it (an editor's rights, or the page, may have gone since the start),
+            and only the owner changes who may open it. Fresh from the bucket, not the caches."""
+            name, email = up.name, up.who
+            current = gw.store.current(name)
+            if not current:
+                return  # a new page: a team account, checked at the start
+            labels = gw.store.labels(name)
+            owner = owner_of(labels, gw.store.meta(name, current).get("published_by", ""))
+            if not may_change(email, owner, editors_of(labels), site.email_domain):
+                raise Refused(403, f"{name} belongs to {owner or 'someone else'} now")
+            if email.strip().lower() != owner.strip().lower():
+                if labels.get("deleted"):
+                    raise Refused(404, f"no page named {name}")
+                if up.visibility or up.people:
+                    raise Refused(403, f"only {owner} can change who may open {name}")
+
         def publish_start(self, name: str, data):
             try:
                 check_name(name)
@@ -1377,7 +1400,7 @@ def make_handler(gw: Gateway):
                 return self.send_json(200, {"version": version, "uploads": uploads})
             if not gw.limit.allow(email.lower()):
                 raise Refused(429, "too many changes, wait a minute")
-            page, _ = gw.uploads.commit(name, version, email)
+            page, _ = gw.uploads.commit(name, version, email, self.may_commit)
             gw.pages.forget(name)
             gw.labels.forget(name)
             gw.names.add(name)
@@ -1403,7 +1426,8 @@ def make_handler(gw: Gateway):
             if not gw.limit.allow(email.lower()):
                 raise Refused(429, "too many changes, wait a minute")
             phases.lap("lookup")
-            page = save_edits(gw.store, name, email, data, gw.uploads, gw.files, gw.pages, phases)
+            page = save_edits(gw.store, name, email, data, gw.uploads, gw.files, gw.pages, phases,
+                              site.email_domain)  # fmt: skip
             gw.labels.forget(name)
             facts = gw.facts(name, email)
             phases.lap("answer")

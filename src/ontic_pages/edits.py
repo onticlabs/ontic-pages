@@ -281,12 +281,13 @@ def save(
     files: FileCache | None = None,
     pages: PageCache | None = None,
     phases: Phases | None = None,
+    domain: str = "",
 ) -> dict:
     """Write the edited page as a new version and make it current. Returns its page.json.
     `uploads` reserves the version id against publishes under way. `files` and `pages` are the
     gateway's caches: what they hold (the old version's page.json, file list and HTML, the
     page's state) is not read again, and what was written goes into them. `phases` gets the
-    time of each step."""
+    time of each step; `domain` is the team's (may_change)."""
     version, rel, changes = check(body)
     files = files or FileCache(store)
     phases = phases or Phases()
@@ -305,9 +306,11 @@ def save(
             raise Refused(409, STALE)
         old = files.meta(name, current)
         labels = pages.labels.get(name) if pages else store.labels(name)
+        if labels.get("deleted"):  # deleted since the bar was opened: nothing is brought back
+            raise Refused(404, f"no page named {name}")
         if not owner:
             owner = owner_of(labels, old.get("published_by") or "")
-        if not may_change(who, owner, editors_of(labels)):
+        if not may_change(who, owner, editors_of(labels), domain):
             raise Refused(403, "only the owner or an editor can edit this page")
         if old.get("format") == "markdown":
             raise Refused(409, "a Markdown update is edited from the overview (Edit)")
