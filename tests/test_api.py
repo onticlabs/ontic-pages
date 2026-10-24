@@ -227,7 +227,7 @@ def test_who_may_publish(local, store, site):
     srv = local()
     body = {"files": files_of(("index.html", 1))}
     status, answer = call(srv, "/_api/pages/theirs/versions", OTHER, body)
-    assert status == 403 and "only they can publish" in answer["error"]
+    assert status == 403 and "only they and its editors can publish" in answer["error"]
     assert call(srv, "/_api/pages/theirs/versions", OWNER, body)[0] == 200
     status, answer = call(srv, "/_api/pages/brand-new/versions", OUTSIDER, body)
     assert status == 403 and "@onticlabs.io" in answer["error"]

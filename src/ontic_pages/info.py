@@ -117,11 +117,14 @@ def shared(visibility: str, people) -> str:
     return f"{visibility}, shared with {', '.join(people)}" if people else visibility
 
 
-def info_text(name: str, current: str | None, metas: list[dict], visibility: str, people=()) -> str:
+def info_text(
+    name: str, current: str | None, metas: list[dict], visibility: str, people=(), editors=()
+) -> str:
     page = shown(current, metas)
     lines = [
         f"page         {name}",
         f"visibility   {shared(visibility, people)}",
+        f"editors      {', '.join(editors) or 'none'}",
         f"current      {current}",
         f"published    {stamp(page.get('published_at'))} by {page.get('published_by', '')}",
         f"description  {page.get('description', '')}",

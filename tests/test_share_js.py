@@ -8,7 +8,7 @@ pytestmark = pytest.mark.skipif(not NODE, reason="needs node")
 
 SHARE = r"""
 const PAGE = { name: "report", content_origin: CONTENT, current: "v1", role: ROLE,
-  visibility: "private", people: PEOPLE, published_by: "owner@onticlabs.io",
+  visibility: "private", people: PEOPLE, editors: EDITORS, published_by: "owner@onticlabs.io",
   email_domain: "onticlabs.io", versions: [{ version: "v1", published_at: "", description: "" }] };
 const facts = { page: PAGE, view: { path: "/", version: null } };
 const frame = E("iframe", { id: "frame" });
@@ -20,12 +20,16 @@ const field = E("input", { id: "s-people" });
 field.value = "";
 const box = E("div", { id: "s-people-box" }), save = E("button", { id: "s-people-save" });
 box.hidden = save.hidden = true;
+const editors = E("input", { id: "s-editors" });
+editors.value = "";
+const ebox = E("div", { id: "s-editors-box" }), esave = E("button", { id: "s-editors-save" });
+ebox.hidden = esave.hidden = true;
 const ids = ["m-by", "m-owner", "m-time", "m-desc", "m-versions", "old", "s-note", "s-explain",
   "s-owner", "s-error", "title-btn", "title-menu", "info-btn", "info-panel", "share-btn",
   "share-panel", "m-raw", "slow", "retry"];
 const stage = E("main", { id: "stage" }, [frame,
   E("div", { id: "status" }, [E("div", { class: "spinner" })])]);
-const bar = E("header", { class: "bar" }, [access, box, field, save,
+const bar = E("header", { class: "bar" }, [access, box, field, save, ebox, editors, esave,
   ...ids.map((id) => E("div", { id }))]);
 const body = E("body", {}, [bar, stage]);
 const byId = (id) => (id === "ontic-facts" ? { textContent: JSON.stringify(facts) }
@@ -47,8 +51,25 @@ vm.runInNewContext(SOURCE, { window, document, location, history: { replaceState
 fire(document, "DOMContentLoaded");
 const error = byId("s-error");
 (async () => {
-  const out = { first: [box.hidden, field.value, field.readOnly, save.hidden] };
-  if (RACE) {
+  const out = { first: [box.hidden, field.value, field.readOnly, save.hidden],
+    editors: [ebox.hidden, editors.value, editors.readOnly, esave.hidden] };
+  if (EDIT) {
+    // The owner names editors: refused with the error shown and the text kept; then saved
+    // (Enter) and shown as the gateway keeps it. Others' Enter sends nothing.
+    editors.value = "Georg@onticlabs.io, x@gmail.com";
+    fire(editors, "input");
+    answers.push({ ok: false, status: 400, body: { error: "bad email 'x@gmail.com'" } });
+    esave.click();
+    for (let i = 0; i < 5; i++) await tick();
+    out.refused = [fetches.slice(), editors.value, error.textContent, error.hidden];
+    fetches.length = 0;
+    editors.value = "georg@onticlabs.io";
+    answers.push({ ok: true, status: 200, body: Object.assign({}, PAGE,
+      { editors: ["georg@onticlabs.io"] }) });
+    fire(editors, "keydown", { key: "Enter" });
+    for (let i = 0; i < 5; i++) await tick();
+    out.saved = [fetches.slice(), editors.value, error.hidden, ebox.hidden];
+  } else if (RACE) {
     // Save [a, b], then before its answer: Enter on [a, x], Enter on [a] (it replaces the
     // queued [a, x]), then type c without saving. Only [a] goes out, after the first answer,
     // so b cannot come back and c gets nothing unasked; the select stays disabled meanwhile.
@@ -76,6 +97,7 @@ const error = byId("s-error");
     out.calls = fetches.length;
   } else if (ROLE !== "owner") {
     fire(field, "keydown", { key: "Enter" });
+    fire(editors, "keydown", { key: "Enter" });
     out.enter = fetches.length;
   } else {
     field.value = "B@onticlabs.io, x@gmail.com;  ";
@@ -97,8 +119,9 @@ const error = byId("s-error");
 """
 
 
-def share(role: str, people: list[str], race: bool = False) -> dict:
-    return run(SHARE, served("bar.js"), ROLE=role, PEOPLE=people, RACE=race)
+def share(role: str, people: list[str], race: bool = False, editors=(), edit=False) -> dict:
+    return run(SHARE, served("bar.js"), ROLE=role, PEOPLE=people, RACE=race,
+               EDITORS=list(editors), EDIT=edit)  # fmt: skip
 
 
 def test_owner_edits_the_people():
@@ -131,3 +154,22 @@ def test_people_see_the_list_read_only():
     assert out["first"] == [False, "a@onticlabs.io, b@onticlabs.io", True, True]
     assert out["enter"] == 0  # Enter saves nothing for them
     assert share("viewer", [])["first"][0] is True  # nobody listed: nothing to show
+
+
+def test_owner_names_the_editors():
+    out = share("owner", [], edit=True)
+    assert out["editors"] == [False, "", False, False]  # the owner always sees the box
+    url = "/_api/pages/report/editors"
+    assert out["refused"] == [
+        [[url, "POST", {"editors": ["Georg@onticlabs.io", "x@gmail.com"]}]],
+        "Georg@onticlabs.io, x@gmail.com", "bad email 'x@gmail.com'", False,
+    ]  # fmt: skip
+    sent = {"editors": ["georg@onticlabs.io"]}
+    assert out["saved"] == [[[url, "POST", sent]], "georg@onticlabs.io", True, False]
+
+
+def test_others_see_the_editors_read_only():
+    out = share("viewer", [], editors=["georg@onticlabs.io"])
+    assert out["editors"] == [False, "georg@onticlabs.io", True, True]
+    assert out["enter"] == 0  # Enter saves nothing for them, on either list
+    assert share("editor", [])["editors"][0] is True  # none named: nothing to show

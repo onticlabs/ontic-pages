@@ -14,8 +14,8 @@ the API when it opens.
 Signed-in viewers also get the comments (static/comments.js and comments.css in the bar,
 static/pins.js served as the second part of the bridge): threads attached to elements of the
 page, with pins and outlines on it, a thread popover and a side panel with every thread. The
-owner, on the current version, can edit the page's text in place (static/edit.js in bar.js,
-static/edit-bridge.js in the bridge); there is no button for it.
+owner or an editor, on the current version, can edit the page's text in place (static/edit.js in
+bar.js, static/edit-bridge.js in the bridge); there is no button for it.
 
 The command line's sign-in page (login_html, static/login.js) lives here too: it is the other
 HTML page on the apex with a script.
@@ -283,6 +283,11 @@ def shell_html(page: dict, view: dict, assets: Assets) -> str:
 <label class="label" for="s-people">Shared with</label>
 <input id="s-people" type="text" autocomplete="off" spellcheck="false" placeholder="name@{e(page["email_domain"])}, ...">
 <button class="item" type="button" id="s-people-save" hidden>Save people</button>
+</div>
+<div id="s-editors-box" hidden>
+<label class="label" for="s-editors">Can edit</label>
+<input id="s-editors" type="text" autocomplete="off" spellcheck="false" placeholder="name@{e(page["email_domain"])}, ...">
+<button class="item" type="button" id="s-editors-save" hidden>Save editors</button>
 </div>
 <p class="muted" id="s-note"{" hidden" if owner_can else ""}>Only the owner can change this.</p>
 <p class="error" id="s-error" hidden></p>

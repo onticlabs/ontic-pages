@@ -30,6 +30,8 @@ from .store import (
     check_pillar,
     check_tags,
     check_visibility,
+    editors_of,
+    owner_of,
 )
 
 META_FILE = "page.json"
@@ -278,23 +280,36 @@ def page_lock(name: str) -> threading.Lock:
         return _locks[name]
 
 
-def finish(store: Store, page: dict, visibility: str | None, people=()) -> str:
+def finish(
+    store: Store, page: dict, visibility: str | None, people=(), before: str | None = None
+) -> str:
     """After the files: page.json, labels.json (the labels of this version, not deleted), then
     the visibility and its people (only when given; a later publish without it keeps both),
     then flip `current`. Returns page.json's ETag (may be empty). The gateway calls it under
-    page_lock, so a delivery change cannot land between reading labels.json and writing it."""
+    page_lock, so a delivery change cannot land between reading labels.json and writing it.
+    `before`: the publisher of the version this one replaces, when the caller has it."""
     name, version = page["name"], page["version"]
     # Delivery belongs to the page, not a version. Missing on an existing page means server;
     # only the first successful publication of a new name defaults to direct delivery.
     old_labels = store.labels(name)
     delivery = old_labels.get("delivery")
+    owner = owner_of(old_labels, "")
+    current = store.current(name) if delivery is None or not owner else None
     if delivery is None:
-        delivery = "server" if store.current(name) else "direct"
+        delivery = "server" if current else "direct"
     if delivery not in ("server", "direct"):
         delivery = "server"
+    # The owner and editors belong to the page too. Without an owner on record (pages from
+    # before editors) the owner is the publisher of the version this one replaces, so a version
+    # an editor publishes does not move it.
+    if not owner:
+        if before is None:
+            before = store.meta(name, current).get("published_by") if current else ""
+        owner = before or page["published_by"]
+    kept = {"delivery": delivery, "owner": owner, "editors": list(editors_of(old_labels))}
     etag = store.put(store.key(name, version, META_FILE), page_json(page))
     # The labels start again from this version (and a deleted page is back).
-    store.set_labels(name, {**{k: page.get(k) for k in LABEL_KEYS}, "delivery": delivery})
+    store.set_labels(name, {**{k: page.get(k) for k in LABEL_KEYS}, **kept})
     if visibility is not None:
         store.set_visibility(name, visibility, people)
     store.set_current(name, version)

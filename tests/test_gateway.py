@@ -231,4 +231,4 @@ def test_current_is_cached(store, site, s3):
     owner = store.meta("report", "20261007T153000Z")["published_by"]
     s3.calls.clear()
     assert cache.get("report") == cache.get("report") == ("20261007T153000Z", "ontic", owner, ())
-    assert s3.calls == ["get_object"] * 3  # current, visibility and page.json, once
+    assert s3.calls == ["get_object"] * 4  # current, visibility, page.json and labels, once

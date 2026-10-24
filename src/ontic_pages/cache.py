@@ -18,7 +18,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from .store import Store
+from .store import Store, owner_of
 
 MB = 1024 * 1024
 
@@ -140,16 +140,18 @@ class FileCache:
 
 class PageCache:
     """(current version, visibility, owner, people) and the versions of each page, kept for
-    `ttl` seconds so a page with many assets costs one lookup. The owner is the current
-    version's published_by; people are those a private page is shared with (Store.access).
+    `ttl` seconds so a page with many assets costs one lookup. The owner is labels.json's
+    `owner`, else the current version's published_by (owner_of); people are those a private
+    page is shared with (Store.access).
 
     Every change the gateway makes to a page (visibility, current, a publish) ends with
     forget(), which also counts up the page's generation. A value read before a forget is never
     kept after it: get() keeps what it read only when the generation did not move meanwhile, and
     put() (a saved edit) only when it is still the generation of the snapshot it started from."""
 
-    def __init__(self, store: Store, files: FileCache, ttl: float):
+    def __init__(self, store: Store, files: FileCache, ttl: float, labels=None):
         self.store, self.files, self.ttl = store, files, ttl
+        self.labels = labels or LabelCache(store, ttl)  # the gateway shares its own
         self.lock = threading.Lock()
         self.entries: dict[str, tuple[float, tuple]] = {}
         self.lists: dict[str, tuple[float, list[str]]] = {}
@@ -169,6 +171,8 @@ class PageCache:
         version = self.store.current(name)
         visibility, people = self.store.access(name)
         owner = self.files.meta(name, version).get("published_by", "") if version else ""
+        if version:  # labels.json names the owner once the page has editors (Store.owner_of)
+            owner = owner_of(self.labels.get(name), owner)
         value = (version, visibility, owner, people)
         with self.lock:
             if self.generations.get(name, 0) == generation:

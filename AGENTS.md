@@ -32,7 +32,11 @@ See README.md for what it does and deploy/README.md for how it is hosted.
   oauth2-proxy.
 - `src/ontic_pages/auth.py`: who is asking (the oauth2-proxy `/oauth2/auth` subrequest, or
   `--local-as`), the access rule (a private page's people come from its `visibility` file,
-  `Store.access`, through the page cache), the write rate limit. Never read identity request headers.
+  `Store.access`, through the page cache; its editors open it too, `Gateway.openers`), the write
+  rate limit. Who may change a page (edit text, publish, set current): the owner or an editor,
+  `Store.may_change`; the owner is `labels.json`'s `owner`, else the current version's
+  publisher (`owner_of`), and `editors` live in `labels.json` too (owner only, the
+  `/editors` endpoint and `share --edit`). Never read identity request headers.
   A Bearer token (tokens.py) is the other identity; it is refused with any Origin or
   Sec-Fetch-Site (browsers never hold tokens).
 - `src/ontic_pages/cache.py`: the in-memory caches (version files and file lists, page state);

@@ -158,8 +158,9 @@ page, there are none. Only its author deletes a comment, and it stays as "delete
 always go through the gateway (never `--direct`); when the gateway says too many changes (20 a
 minute), these commands wait and try again.
 
-Anyone with an `@onticlabs.io` account may create a page; only its owner (the publisher of the
-current version) may publish a new version of it, `share` it or `set-current`. A publish uploads
+Anyone with an `@onticlabs.io` account may create a page; only its owner, and the editors the
+owner names (below), may publish a new version of it or `set-current`; `share` stays with the
+owner. A publish uploads
 up to 8 files at a time (each retried twice), at most 20,000 files and 20 GB per version; nothing
 becomes visible until every file is in the bucket with the size announced.
 
@@ -169,8 +170,8 @@ it to see what is published now, for example after someone fixed text in the bro
 
 ### Edit text in place
 
-The owner of a page, looking at its current version in the bar, can fix its text right there:
-there is no Edit button, editing is always on for them. Every element that holds nothing but
+The owner of a page, or one of its editors, looking at its current version in the bar, can fix
+its text right there: there is no Edit button, editing is always on for them. Every element that holds nothing but
 text (paragraphs, headings, list items, table cells, captions, ...) can be clicked into and typed
 over. Nothing highlights it: the text looks exactly like the page, only the text cursor shows
 (the browser's focus ring is turned off on the text being edited).
@@ -178,7 +179,7 @@ Interactive elements are never editable, nor anything inside them (links, button
 labels, form fields, elements with a `role` such as button or link, `onclick`, a `tabindex` (a
 container's `tabindex="-1"` aside), a pointer cursor, or the page's own `contenteditable`), so
 links, buttons and app controls work as usual. A text counts as changed only once someone typed in it, so text the page's own scripts
-update is never counted. Non-owners, and older versions, get nothing editable.
+update is never counted. Other viewers, and older versions, get nothing editable.
 
 The bar shows nothing about editing until a text changed; then "N changes", Save and Discard
 (its tooltip: "Text only. Saved as a new version; older versions stay in the title menu.").
@@ -352,6 +353,18 @@ with `--visibility`) sets the whole list, so sharing at another level, or `priva
 `--with`, leaves nobody but the owner on it. In the bar's Share panel the owner edits the list
 (emails separated by commas, Save or Enter); the people on it see it there read-only. `info` and
 `list` show it.
+
+### Editors
+
+The owner can let others change a page, whatever its visibility: `share <name> --edit
+georg@onticlabs.io` (repeatable, the whole list each time; `--no-editors` takes everyone off;
+with a level too, both change), or the "Can edit" list in the bar's Share panel. Editors edit text
+in place, publish new versions (`publish --name <name>`, which never changes who may open the
+page) and `set-current`, and open a private page without being on its `--with` list. Sharing,
+delivery and deleting stay with the owner, and the owner stays the owner: `labels.json` records
+them and the editors, so a version an editor publishes does not move ownership (a page from
+before editors records its owner the first time editors are set or a version is published).
+`info` and `list` show the editors. No command line is needed to edit: the bar does it.
 For `private`, the publisher is matched by email: through the gateway that is always the
 address you signed in with; with `--direct` it is `ONTIC_PAGES_EMAIL` (or `git config
 user.email`), so use the address you sign in with. `publish` and `share` print who that is. The info page (`/<name>/_info`) always needs sign-in,
@@ -366,7 +379,8 @@ even for public pages.
                                    owner only)
     <name>/comments.json           the comment threads, written by the gateway only
     <name>/labels.json             pillar, tags, milestone, title as changed since the last
-                                   publish (over page.json), and deleted
+                                   publish (over page.json), delivery, deleted, owner and
+                                   editors
     _milestones.json               the milestones, written by the gateway only (with their
                                    GitHub link and sync state, and deleted for the bin)
     _views.json                    the saved views of the overview, written by the gateway only
@@ -417,8 +431,9 @@ page.json and version ids stay in UTC.
   page with what page.json says and every version; `/_api/pages/<name>` gives the
   page facts as JSON, `/_api/pages/<name>/versions/<version>` one version's details for the
   bar's Details panel (signed in), and `POST /_api/pages/<name>/visibility` changes visibility
-  (`{"visibility": "private", "people": [...]}`, owner only, from the bar or the command line); `POST /_api/pages/<name>/edits` saves text
-  edited in the bar (owner only). `/_api/pages/<name>/comments` reads the comment threads and
+  (`{"visibility": "private", "people": [...]}`, owner only, from the bar or the command line),
+  `POST /_api/pages/<name>/editors` (`{"editors": [...]}`, owner only) who may change it;
+  `POST /_api/pages/<name>/edits` saves text edited in the bar (owner or editor). `/_api/pages/<name>/comments` reads the comment threads and
   takes new ones, replies, resolve and delete (signed in, from the bar or the command line). The
   command line uses the rest of `/_api/` (list, info, current, publish, files for `pull`) and
   `/_cli/login`; see `gateway.py` for the routes.

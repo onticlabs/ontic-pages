@@ -115,14 +115,14 @@ body[data-visibility="public"] .vis-public { display: inline; }
 }
 .versions .desc:empty { display: none; }
 .owner { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
-select, #s-people {
+select, #s-people, #s-editors {
   width: 100%; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px;
   background: var(--bg);
 }
 select:disabled { opacity: .7; }
-#s-people { color: var(--text); font: inherit; }
-#s-people-box { padding-top: 8px; }
-#s-people-save { margin-top: 4px; }
+#s-people, #s-editors { color: var(--text); font: inherit; }
+#s-people-box, #s-editors-box { padding-top: 8px; }
+#s-people-save, #s-editors-save { margin-top: 4px; }
 #s-explain, #s-note { padding-top: 6px; }
 .error { color: var(--danger); font-size: 13px; padding-top: 6px; }
 

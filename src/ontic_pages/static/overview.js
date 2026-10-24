@@ -144,6 +144,9 @@
   function titleOf(r) { return r.title || r.description || r.name; }
   function reportUrl(r) { return "/" + encodeURIComponent(r.name) + "/"; }
   function mine(r) { return r.author && r.author.toLowerCase() === viewer.toLowerCase(); }
+  function mayEdit(r) {  // the owner, or an editor the owner named (Share panel, "Can edit")
+    return mine(r) || (r.editors || []).some(function (e) { return e.toLowerCase() === viewer.toLowerCase(); });
+  }
   function linked(m) { return data.reports.filter(function (r) { return r.milestone === m.id; }); }
   function statusLabel(m) { return m.status === "answered" && m.negative ? "Answered, negative" : STATUS[m.status]; }
 
@@ -835,7 +838,7 @@
       if (data.team) items.push(h("button", { class: "pitem", type: "button", onclick: function () {
         state.menu = ""; state.edit = id + "\ntitle"; render();
       } }, icon("edit"), "Rename"));
-      if (mine(row) && row.format === "markdown") items.push(h("button", { class: "pitem", type: "button",
+      if (mayEdit(row) && row.format === "markdown") items.push(h("button", { class: "pitem", type: "button",
         onclick: function () { state.menu = ""; render(); editUpdate(row); } }, icon("edit"), "Edit the update"));
       if (mine(row)) items.push(h("button", { class: "pitem danger", type: "button",
         onclick: function () { state.menu = ""; render(); confirmDelete(row); } }, icon("cross"), "Delete"));

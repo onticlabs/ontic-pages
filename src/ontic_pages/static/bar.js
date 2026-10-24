@@ -22,6 +22,7 @@
   var pendingTimer = 0;
   var VERSION_PATH = /^\/_v\/(\d{8}T\d{6}Z)(\/.*)?$/;
   var peopleTyped = false; // the Share panel's people changed and not saved yet
+  var editorsTyped = false, savingEditors = false; // its editors ("Can edit"), likewise
   // One visibility change at a time: a later one could otherwise answer first and an earlier
   // one undo it (a person taken off the list back on). A Save meanwhile waits for it, with the
   // list as it was when pressed (a later press replaces it): {people, text} or null.
@@ -296,6 +297,15 @@
       field.readOnly = !owns;
       $("s-people-save").hidden = !owns;
     }
+    // Who may change the page besides the owner (any visibility): the owner edits the list,
+    // everyone else sees it when there is one.
+    var editors = page.editors || [], editorsField = $("s-editors");
+    if (editorsField) {
+      $("s-editors-box").hidden = !owns && !editors.length;
+      if (!editorsTyped) editorsField.value = editors.join(", ");
+      editorsField.readOnly = !owns || savingEditors;
+      $("s-editors-save").hidden = !owns;
+    }
     features.forEach(function (f) { if (f.render) f.render(); });
   }
 
@@ -378,6 +388,37 @@
     var people = text.split(/[\s,;]+/).filter(Boolean);
     if (sharing) queued = { people: people, text: text };
     else setVisibility("private", people, text);
+  }
+
+  // The whole list of editors as typed when pressed; one save at a time.
+  function saveEditors() {
+    if (savingEditors || page.role !== "owner") return;
+    var field = $("s-editors"), error = $("s-error"), text = field.value;
+    savingEditors = true;
+    error.hidden = true;
+    fetch("/_api/pages/" + encodeURIComponent(name) + "/editors", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ editors: text.split(/[\s,;]+/).filter(Boolean) })
+    }).then(function (response) {
+      return response.json().then(function (body) { return { ok: response.ok, body: body }; });
+    }).then(function (result) {
+      if (result.ok && result.body && result.body.name === name) {
+        page = result.body;
+        if (field.value === text) editorsTyped = false;
+      } else {
+        error.textContent = (result.body && result.body.error) || "Could not change it.";
+        error.hidden = false;
+      }
+      savingEditors = false;
+      render();
+    }, function () {
+      error.textContent = "Could not reach the server.";
+      error.hidden = false;
+      savingEditors = false;
+      render();
+    });
   }
 
   // ---- live updates: a new current version fades in where you were -------------------------
@@ -477,6 +518,14 @@
       field.addEventListener("input", function () { peopleTyped = true; });
       field.addEventListener("keydown", function (event) {
         if (event.key === "Enter" && page.role === "owner") savePeople();
+      });
+    }
+    var editorsField = $("s-editors");
+    if (editorsField) {
+      $("s-editors-save").addEventListener("click", saveEditors);
+      editorsField.addEventListener("input", function () { editorsTyped = true; });
+      editorsField.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") saveEditors();
       });
     }
     var signin = $("signin");

@@ -23,10 +23,13 @@ from .store import (
     VERSION_RE,
     VISIBILITIES,
     Store,
+    check_editors,
     check_name,
     check_people,
     check_tags,
+    editors_of,
     make_client,
+    owner_of,
 )
 
 LEVELS = (
@@ -140,29 +143,65 @@ def cmd_publish(args) -> None:
     print(url_for(store, cfg, args.name))
 
 
+def given_editors(args) -> list[str] | None:
+    """--edit (repeatable, the whole list) or --no-editors; None when neither was given."""
+    if args.no_editors:
+        if args.editors:
+            raise SystemExit("--no-editors takes no --edit")
+        return []
+    if not args.editors:
+        return None
+    return check_editors(args.editors, EMAIL_DOMAIN if direct(args) else "")
+
+
+def editors_note(editors) -> None:
+    if editors:
+        print(f"editors: {', '.join(editors)} can edit it, publish and set the current version")
+    else:
+        print("editors: none, only the owner changes it")
+
+
 def cmd_share(args) -> None:
-    """The level and, for private, the whole list of people (none given: nobody else)."""
+    """The level and, for private, the whole list of people (none given: nobody else); or with
+    --edit / --no-editors the whole list of editors (and the level too when given)."""
     check_name(args.name)
+    editors = given_editors(args)
+    if args.visibility is None and editors is None:
+        raise SystemExit("give a level (private, ontic, public), --edit EMAIL or --no-editors")
     people = given_people(args, args.visibility)
     if not direct(args):
         api, cfg = open_api()
         if people and "people" not in api.get(remote.page_path(args.name)):  # before changing
             raise SystemExit(NO_PEOPLE + f"{args.name} is unchanged")
-        body = {"visibility": args.visibility, "people": people}
-        page = api.post(remote.page_path(args.name, "visibility"), body)
-        check_shared(page, people, f"{args.name} is now private to you alone")
-        print(f"{args.name} is now {page['visibility']}")
-        if page["visibility"] == "private":
-            owner_note(page.get("published_by", ""), page.get("people") or [])
+        if args.visibility is not None:
+            body = {"visibility": args.visibility, "people": people}
+            page = api.post(remote.page_path(args.name, "visibility"), body)
+            check_shared(page, people, f"{args.name} is now private to you alone")
+            print(f"{args.name} is now {page['visibility']}")
+            if page["visibility"] == "private":
+                owner_note(page.get("published_by", ""), page.get("people") or [])
+        if editors is not None:
+            page = api.post(remote.page_path(args.name, "editors"), {"editors": editors})
+            if "editors" not in page:
+                raise SystemExit("the gateway does not support editors yet (update it)")
+            editors_note(page["editors"])
         print(cfg.page_url(args.name))
         return
     store, cfg = open_store(args)
-    if not store.current(args.name):
+    current = store.current(args.name)
+    if not current:
         raise SystemExit(f"no page named {args.name}")
-    store.set_visibility(args.name, args.visibility, people)
-    print(f"{args.name} is now {args.visibility}")
-    if args.visibility == "private":
-        private_note(store, args.name)
+    if args.visibility is not None:
+        store.set_visibility(args.name, args.visibility, people)
+        print(f"{args.name} is now {args.visibility}")
+        if args.visibility == "private":
+            private_note(store, args.name)
+    if editors is not None:
+        labels = store.labels(args.name)
+        owner = owner_of(labels, store.meta(args.name, current).get("published_by", ""))
+        editors = [e for e in editors if e != owner.strip().lower()]
+        store.set_labels(args.name, {**labels, "owner": owner, "editors": editors})
+        editors_note(editors)
     print(url_for(store, cfg, args.name))
 
 
@@ -185,7 +224,8 @@ def page_lines(pages: list[dict], args) -> list[str]:
         when = stamp(p.get("published_at")) or version_stamp(p.get("current", ""))
         line = f"{p['name']:32} {p['visibility']:8} {pillar:20} {when}  {p.get('description', '')}"
         line += "  [" + ", ".join(tags) + "]" if tags else ""
-        lines.append(line + ("  shared with " + ", ".join(p["people"]) if p.get("people") else ""))
+        line += "  shared with " + ", ".join(p["people"]) if p.get("people") else ""
+        lines.append(line + ("  editors " + ", ".join(p["editors"]) if p.get("editors") else ""))
     return lines
 
 
@@ -217,8 +257,9 @@ def cmd_list(args) -> None:
         if current and not store.labels(name).get("deleted"):
             meta = store.meta(name, current)
             visibility, people = store.access(name)
-            pages.append({**meta, "name": name, "current": current,
-                          "visibility": visibility, "people": list(people)})  # fmt: skip
+            pages.append({**meta, "name": name, "current": current, "visibility": visibility,
+                          "people": list(people),
+                          "editors": list(editors_of(store.labels(name)))})  # fmt: skip
     print("\n".join(page_lines(pages, args)))
 
 
@@ -247,6 +288,10 @@ def cmd_set_current(args) -> None:
     store, cfg = open_store(args)
     if not VERSION_RE.match(args.version) or args.version not in store.versions(args.name):
         raise SystemExit(f"{args.name} has no version {args.version} (see: list --name)")
+    labels, current = store.labels(args.name), store.current(args.name)
+    if not owner_of(labels, "") and current:  # the owner stays, whoever published the version
+        owner = store.meta(args.name, current).get("published_by", "")
+        store.set_labels(args.name, {**labels, "owner": owner})
     store.set_current(args.name, args.version)
     print(f"{args.name} now serves {args.version}")
     print(url_for(store, cfg, args.name))
@@ -257,14 +302,16 @@ def cmd_info(args) -> None:
     if not direct(args):
         api, _ = open_api()
         page = api.get(remote.page_path(args.name, "info"))
-        people = page.get("people") or []
-        print(info_text(args.name, page["current"], page["versions"], page["visibility"], people))
+        people, editors = page.get("people") or [], page.get("editors") or []
+        print(info_text(args.name, page["current"], page["versions"], page["visibility"], people,
+                        editors))  # fmt: skip
         return
     store, _ = open_store(args)
     current, metas = history(store, args.name)
     if not metas:
         raise SystemExit(f"no page named {args.name}")
-    print(info_text(args.name, current, metas, *store.access(args.name)))
+    level, people = store.access(args.name)
+    print(info_text(args.name, current, metas, level, people, editors_of(store.labels(args.name))))
 
 
 def cmd_pull(args) -> None:
@@ -464,13 +511,18 @@ def build_parser() -> argparse.ArgumentParser:
                    "@onticlabs.io) that may open it too, repeatable")  # fmt: skip
     s.set_defaults(func=cmd_publish)
 
-    s = sub.add_parser("share", parents=[key], help="change who can open a page")
+    s = sub.add_parser("share", parents=[key], help="change who can open or edit a page")
     s.add_argument("name")
-    s.add_argument("visibility", choices=VISIBILITIES, help=LEVELS)
+    s.add_argument("visibility", nargs="?", choices=VISIBILITIES, help=LEVELS)
     s.add_argument("--with", dest="people", action="append", default=[], metavar="EMAIL",
                    help="private only: a team email (at the gateway's domain, @onticlabs.io) "
                    "that may open it too, repeatable; the list replaces the old one (none: "
                    "only you)")  # fmt: skip
+    s.add_argument("--edit", dest="editors", action="append", default=[], metavar="EMAIL",
+                   help="a team email that may also edit the page's text, publish a new version "
+                   "and set the current one, whatever the level; repeatable, the list replaces "
+                   "the old one")  # fmt: skip
+    s.add_argument("--no-editors", action="store_true", help="only you change the page again")
     s.set_defaults(func=cmd_share)
 
     s = sub.add_parser("delivery", help="choose server or direct file delivery for a page you own")
